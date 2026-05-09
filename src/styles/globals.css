@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  /* Scrollbar - subtle, IDE-like */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #334155;
+  }
+
+  /* Reduce motion for accessibility */
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-bg-panel border border-border;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-sm
+           text-fg-muted hover:text-fg hover:bg-bg-hover
+           transition-colors duration-150 cursor-pointer
+           focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand;
+  }
+
+  .btn-primary {
+    @apply bg-brand hover:bg-brand-hover text-white;
+  }
+
+  .input {
+    @apply bg-bg-elevated border border-border rounded px-2 py-1 text-sm
+           placeholder:text-fg-subtle
+           focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand/40
+           transition-colors;
+  }
+
+  .divider {
+    @apply h-px bg-border;
+  }
+}

@@ -1,0 +1,55 @@
+[package]
+name = "logmaster"
+version = "0.1.0"
+description = "Fast, lightweight, modern log viewer"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "logmaster_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+memmap2 = "0.9"
+memchr = "2.7"
+regex = "1.10"
+chardetng = "0.1"
+encoding_rs = "0.8"
+notify = "6.1"
+parking_lot = "0.12"
+dashmap = "6"
+anyhow = "1"
+thiserror = "1"
+uuid = { version = "1", features = ["v4"] }
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# Speed up regex / aho-corasick / encoding in dev builds — these crates are
+# performance-critical and we don't gain anything from debugging them.
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3
+[profile.dev.package.memchr]
+opt-level = 3
+[profile.dev.package.encoding_rs]
+opt-level = 3
+[profile.dev.package.memmap2]
+opt-level = 3
