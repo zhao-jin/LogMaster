@@ -29,7 +29,7 @@ export function Welcome() {
           <p className="text-fg-muted text-sm">
             Fast, lightweight, modern log viewer.
           </p>
-          <p className="text-fg-subtle text-xs">by mileszhao</p>
+          <p className="text-fg-subtle text-xs">by miles</p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">

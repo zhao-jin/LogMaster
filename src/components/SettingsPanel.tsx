@@ -146,7 +146,7 @@ export function SettingsPanel({ open, onClose }: Props) {
             <p className="text-sm text-fg-muted">
               LogMaster v0.1.0 — Fast, lightweight, modern log viewer.
             </p>
-            <p className="text-xs text-fg-subtle mt-1">by mileszhao</p>
+            <p className="text-xs text-fg-subtle mt-1">by miles</p>
             <p className="text-xs text-fg-subtle mt-1">
               Settings persist in browser localStorage. Defaults:{" "}
               {Object.entries(DEFAULT_SETTINGS).length} keys.
