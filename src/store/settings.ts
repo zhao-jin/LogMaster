@@ -13,6 +13,8 @@ export interface Settings {
   searchMaxHits: number;
   /** Tail throttle (frontend hint; backend is fixed for now) */
   tailIntervalMs: number;
+  /** Right-side panel width in px (rules / bookmarks). */
+  sidePanelWidth: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -24,6 +26,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showLineNumbers: true,
   searchMaxHits: 5000,
   tailIntervalMs: 33,
+  sidePanelWidth: 380,
 };
 
 interface SettingsState extends Settings {
@@ -41,7 +44,8 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "logmaster:settings",
       storage: createJSONStorage(() => localStorage),
-      version: 1,
+      version: 2,
+      migrate: (state) => ({ ...DEFAULT_SETTINGS, ...(state as object) }),
     }
   )
 );

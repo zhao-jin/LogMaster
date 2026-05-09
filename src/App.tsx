@@ -5,6 +5,7 @@ import { LogView } from "./components/LogView";
 import { StatusBar } from "./components/StatusBar";
 import { RulesPanel } from "./components/RulesPanel";
 import { BookmarksPanel } from "./components/BookmarksPanel";
+import { ResizableSidePanel } from "./components/ResizableSidePanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { FilterBanner } from "./components/FilterBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -73,17 +74,18 @@ export default function App() {
   const handleNextBookmark = useCallback(() => {
     if (!active || active.bookmarks.length === 0) return;
     const current = active.scrollTo ?? -1;
-    const next = active.bookmarks.find((b) => b > current) ?? active.bookmarks[0];
-    setScrollTo(active.id, next);
+    const next =
+      active.bookmarks.find((b) => b.line > current) ?? active.bookmarks[0];
+    setScrollTo(active.id, next.line);
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePrevBookmark = useCallback(() => {
     if (!active || active.bookmarks.length === 0) return;
     const current = active.scrollTo ?? Number.POSITIVE_INFINITY;
     const prev =
-      [...active.bookmarks].reverse().find((b) => b < current) ??
+      [...active.bookmarks].reverse().find((b) => b.line < current) ??
       active.bookmarks[active.bookmarks.length - 1];
-    setScrollTo(active.id, prev);
+    setScrollTo(active.id, prev.line);
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const closeActiveTab = useCallback(async () => {
@@ -164,10 +166,14 @@ export default function App() {
       } else if (mod && e.key === "F2") {
         e.preventDefault();
         if (active) {
+          // Toggle bookmark on the topmost visible line by default; fall
+          // back to search hit / scrollTo target if available.
+          const { scrollTopLine } = useAppStore.getState();
           const line =
             active.scrollTo ??
-            (search.current ? search.current.line : null);
-          if (line != null) toggleBookmark(active.id, line);
+            (search.current ? search.current.line : null) ??
+            scrollTopLine;
+          toggleBookmark(active.id, line);
         }
       } else if (e.key === "F2") {
         e.preventDefault();
@@ -233,15 +239,16 @@ export default function App() {
             <Welcome />
           )}
         </div>
-        <RulesPanel
-          open={side === "rules"}
-          onClose={() => setSide(null)}
-        />
-        <BookmarksPanel
-          open={side === "bookmarks"}
-          onClose={() => setSide(null)}
-          onJump={handleJump}
-        />
+        <ResizableSidePanel open={side === "rules"}>
+          <RulesPanel open={side === "rules"} onClose={() => setSide(null)} />
+        </ResizableSidePanel>
+        <ResizableSidePanel open={side === "bookmarks"}>
+          <BookmarksPanel
+            open={side === "bookmarks"}
+            onClose={() => setSide(null)}
+            onJump={handleJump}
+          />
+        </ResizableSidePanel>
       </div>
       <StatusBar tab={active} hitCount={search.hits.length} />
       <CommandPalette

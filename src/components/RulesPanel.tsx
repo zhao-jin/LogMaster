@@ -32,7 +32,7 @@ export function RulesPanel({ open, onClose }: Props) {
   }
 
   return (
-    <aside className="w-[520px] shrink-0 flex flex-col bg-bg-panel border-l border-border">
+    <aside className="h-full flex flex-col bg-bg-panel">
       <header className="flex items-center justify-between px-3 py-2 border-b border-border">
         <h3 className="text-sm font-semibold text-fg">Rules</h3>
         <div className="flex items-center gap-1">

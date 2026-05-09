@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Bookmark } from "lucide-react";
 import { readLines, readLinesByIndices } from "../lib/ipc";
-import { useAppStore } from "../store/app";
+import { useAppStore, type BookmarkEntry } from "../store/app";
 import { useSettingsStore } from "../store/settings";
+import { LineContextMenu, type LineMenuTarget } from "./LineContextMenu";
 
 const CHUNK = 500;
 
@@ -27,7 +28,7 @@ interface Props {
   lineCount: number;
   followTail: boolean;
   visibleLines: Uint32Array | null; // when non-null, use view projection
-  bookmarks: number[];              // physical line numbers
+  bookmarks: BookmarkEntry[];      // sorted by line
   onToggleBookmark: (physLine: number) => void;
   scrollTo: number | null;          // physical line to jump to
   onScrollDone: () => void;
@@ -47,6 +48,7 @@ export function LogView({
 }: Props) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [, force] = useState(0);
+  const [menu, setMenu] = useState<LineMenuTarget | null>(null);
 
   const fontSize = useSettingsStore((s) => s.fontSize);
   const lineHeight = useSettingsStore((s) => s.lineHeight);
@@ -80,34 +82,38 @@ export function LogView({
     overscan: 60,
   });
 
-  // Prefetch chunks covering visible range, and report scroll position.
-  const items = virtualizer.getVirtualItems();
-  useEffect(() => {
-    if (items.length === 0) {
-      setScrollPosition(0, 0);
-      return;
+  // Track which chunks are currently being fetched so concurrent effect runs
+  // don't queue duplicate IPC calls for the same chunk.
+  const inflight = useRef<Map<string, Set<number>>>(new Map());
+  function getInflight(): Set<number> {
+    let s = inflight.current.get(fileId);
+    if (!s) {
+      s = new Set();
+      inflight.current.set(fileId, s);
     }
-    const first = items[0].index;
-    const last = items[items.length - 1].index;
+    return s;
+  }
 
-    // Report scroll position in terms of physical line indices.
-    const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
-    const botPhys = visibleLines
-      ? visibleLines[last] ?? topPhys
-      : last;
-    setScrollPosition(topPhys, botPhys);
-
+  // Imperative prefetch: load any missing chunks for the currently-visible
+  // virtual range. Called both from the prefetch effect (when items change)
+  // and from the scroll-end timer (after fast scrolling settles).
+  const prefetchVisible = useRef<() => void>(() => {});
+  prefetchVisible.current = () => {
+    const its = virtualizer.getVirtualItems();
+    if (its.length === 0) return;
+    const first = its[0].index;
+    const last = its[its.length - 1].index;
     const firstChunk = Math.floor(first / CHUNK);
     const lastChunk = Math.floor(last / CHUNK);
     const cache = getCache(fileId);
+    const flight = getInflight();
     const toLoad: number[] = [];
     for (let c = firstChunk; c <= lastChunk; c++) {
-      if (!cache.has(c)) toLoad.push(c);
+      if (!cache.has(c) && !flight.has(c)) toLoad.push(c);
     }
     if (toLoad.length === 0) return;
-    let cancelled = false;
-    // Load chunks in parallel — each one re-renders as soon as it's ready.
     for (const c of toLoad) {
+      flight.add(c);
       (async () => {
         const startV = c * CHUNK;
         const endV = Math.min(startV + CHUNK, totalRows);
@@ -121,22 +127,76 @@ export function LogView({
             const r = await readLines(fileId, startV, endV);
             lines = r.lines;
           }
-          if (cancelled) return;
           cache.set(c, lines);
           force((n) => n + 1);
         } catch (e) {
           console.error("readLines failed", e);
-          if (!cancelled) {
-            cache.set(c, []);
-            force((n) => n + 1);
-          }
+          cache.set(c, []);
+          force((n) => n + 1);
+        } finally {
+          flight.delete(c);
         }
       })();
     }
+  };
+
+  // Track scroll velocity. While the user drags fast we skip prefetch; once
+  // they pause for ~80ms we load only the chunks that are *still* visible.
+  const isFastScrolling = useRef(false);
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    let lastY = el.scrollTop;
+    let lastT = performance.now();
+    let resetTimer: number | null = null;
+    function onScroll() {
+      const now = performance.now();
+      const dy = Math.abs(el!.scrollTop - lastY);
+      const dt = now - lastT;
+      if (dt > 0 && dy / dt > 1.5) {
+        isFastScrolling.current = true;
+      }
+      lastY = el!.scrollTop;
+      lastT = now;
+      if (resetTimer != null) clearTimeout(resetTimer);
+      resetTimer = window.setTimeout(() => {
+        isFastScrolling.current = false;
+        // Imperative: load chunks for the *current* visible range.
+        prefetchVisible.current();
+      }, 80);
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    // After a window/panel resize, the visible row count might grow and need
+    // new chunks. Trigger an imperative prefetch on resize as well.
+    const ro = new ResizeObserver(() => {
+      // Defer one frame so the virtualizer has a chance to recompute items.
+      requestAnimationFrame(() => prefetchVisible.current());
+    });
+    ro.observe(el);
     return () => {
-      cancelled = true;
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+      if (resetTimer != null) clearTimeout(resetTimer);
     };
-  }, [items, fileId, totalRows, visibleLines]);
+  }, []);
+
+  // Reactive prefetch when items change (initial mount, resize, jumps).
+  const items = virtualizer.getVirtualItems();
+  useEffect(() => {
+    if (items.length === 0) {
+      setScrollPosition(0, 0);
+      return;
+    }
+    const first = items[0].index;
+    const last = items[items.length - 1].index;
+
+    const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
+    const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
+    setScrollPosition(topPhys, botPhys);
+
+    if (isFastScrolling.current) return;
+    prefetchVisible.current();
+  }, [items, fileId, totalRows, visibleLines, setScrollPosition]);
 
   // Follow tail: scroll to bottom when line count grows
   useEffect(() => {
@@ -173,7 +233,11 @@ export function LogView({
   }, [rules]);
 
   const lineNumWidth = Math.max(4, String(lineCount).length) * 8 + 16;
-  const bookmarkSet = useMemo(() => new Set(bookmarks), [bookmarks]);
+  const bookmarkMap = useMemo(() => {
+    const m = new Map<number, BookmarkEntry>();
+    for (const b of bookmarks) m.set(b.line, b);
+    return m;
+  }, [bookmarks]);
 
   return (
     <div
@@ -194,7 +258,8 @@ export function LogView({
           const cache = getCache(fileId);
           const chunk = cache.get(chunkIdx);
           const text = chunk?.[inner];
-          const isBookmarked = bookmarkSet.has(physIdx);
+          const bookmark = bookmarkMap.get(physIdx);
+          const isBookmarked = !!bookmark;
           const isSearchHit =
             currentSearchHit && currentSearchHit.line === physIdx;
 
@@ -206,22 +271,41 @@ export function LogView({
                 transform: `translateY(${vi.start}px)`,
                 height: `${vi.size}px`,
               }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  physLine: physIdx,
+                  text: text ?? "",
+                  isBookmarked,
+                });
+              }}
             >
-              {/* Bookmark gutter */}
+              {/* Bookmark gutter — always shows a faint icon so users
+                  discover the click target. */}
               <button
                 onClick={() => onToggleBookmark(physIdx)}
-                className="shrink-0 w-5 flex items-center justify-center hover:bg-bg-hover transition-colors"
+                className="group/gutter shrink-0 w-6 flex items-center justify-center hover:bg-bg-hover transition-colors"
                 title={
-                  isBookmarked
-                    ? `Remove bookmark (line ${physIdx + 1})`
+                  bookmark
+                    ? `${bookmark.name} (line ${physIdx + 1}) — click to remove`
                     : `Add bookmark (line ${physIdx + 1})`
                 }
               >
-                {isBookmarked ? (
-                  <Bookmark className="w-3 h-3 text-brand fill-brand" />
-                ) : (
-                  <span className="w-3 h-3" />
-                )}
+                <Bookmark
+                  className={
+                    "w-3.5 h-3.5 transition-all " +
+                    (bookmark
+                      ? ""
+                      : "text-fg-subtle/30 group-hover/gutter:text-brand group-hover/gutter:fill-brand/40")
+                  }
+                  style={
+                    bookmark
+                      ? { color: bookmark.color, fill: bookmark.color }
+                      : undefined
+                  }
+                />
               </button>
 
               {/* Line number */}
@@ -247,7 +331,10 @@ export function LogView({
                 }
               >
                 {text === undefined ? (
-                  <span className="text-fg-subtle italic">…</span>
+                  <span
+                    className="inline-block h-[60%] w-[40%] rounded bg-bg-elevated/60 align-middle animate-pulse"
+                    aria-label="loading"
+                  />
                 ) : (
                   renderLine(
                     text,
@@ -260,6 +347,12 @@ export function LogView({
           );
         })}
       </div>
+
+      <LineContextMenu
+        target={menu}
+        onClose={() => setMenu(null)}
+        onToggleBookmark={onToggleBookmark}
+      />
     </div>
   );
 }

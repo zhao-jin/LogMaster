@@ -11,20 +11,36 @@
     overflow: hidden;
   }
 
-  /* Scrollbar - subtle, IDE-like */
+  /* Scrollbar — visible by default, brand-tinted on hover.
+     Slightly chunkier than IDE defaults so it's easy to grab on big logs. */
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
   }
   ::-webkit-scrollbar-track {
-    background: transparent;
+    background: #0f172a;
   }
   ::-webkit-scrollbar-thumb {
-    background: #1e293b;
-    border-radius: 4px;
+    background: #475569;
+    border: 2px solid #0f172a;   /* creates an inset look */
+    border-radius: 6px;
+    min-height: 32px;
+    min-width: 32px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #334155;
+    background: #64748b;
+  }
+  ::-webkit-scrollbar-thumb:active {
+    background: #3b82f6;          /* brand blue while dragging */
+  }
+  ::-webkit-scrollbar-corner {
+    background: #0f172a;
+  }
+
+  /* Firefox fallback */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #475569 #0f172a;
   }
 
   /* Reduce motion for accessibility */
