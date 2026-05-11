@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import path from "path";
+import path from "node:path";
 
 // Tauri exposes env vars for dev server
 const host = process.env.TAURI_DEV_HOST;

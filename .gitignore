@@ -24,3 +24,7 @@ sample.log
 *.test.log
 vite.log
 vite.err
+
+# tsc -b emit artifacts for the node-side config project
+vite.config.js
+vite.config.d.ts
