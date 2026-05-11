@@ -93,6 +93,74 @@ impl LogFile {
         Ok(out)
     }
 
+    /// Binary-packed version of `read_lines` — returns a single `Vec<u8>`
+    /// shaped as:
+    ///   [u32 count]
+    ///   ([u32 byte_len] [utf-8 bytes])*
+    ///
+    /// All integers little-endian. Designed to be streamed straight to the
+    /// frontend via `tauri::ipc::Response` (raw binary body) so we avoid
+    /// JSON serialization entirely — this is the hot path for scroll
+    /// prefetching where a 2000-line chunk is requested many times per
+    /// second during drag-scroll.
+    pub fn read_lines_packed(&self, start: usize, end: usize) -> Result<Vec<u8>> {
+        let ofs = self.offsets.read();
+        let mmap = self.mmap.read();
+        let n = if ofs.len() <= 1 { 0 } else { ofs.len() - 1 };
+        let end = end.min(n);
+        let count = if start >= end { 0 } else { end - start };
+
+        // Pre-size the output buffer from raw byte spans (upper bound; ASCII
+        // logs will match this exactly, non-ASCII may grow slightly after
+        // decode). Growing a Vec is cheap but an accurate reserve is free.
+        let mut bytes_guess = 4 + count * 4;
+        if count > 0 {
+            bytes_guess += (ofs[end] - ofs[start]) as usize;
+        }
+        let mut out: Vec<u8> = Vec::with_capacity(bytes_guess);
+        out.extend_from_slice(&(count as u32).to_le_bytes());
+
+        if count == 0 {
+            return Ok(out);
+        }
+        for i in start..end {
+            let lo = ofs[i] as usize;
+            let hi = ofs[i + 1] as usize;
+            let slice = &mmap[lo..hi];
+            let trimmed = strip_eol(slice);
+            let (cow, _, _) = self.encoding.decode(trimmed);
+            let decoded = cow.as_ref();
+            write_sanitized(&mut out, decoded);
+        }
+        Ok(out)
+    }
+
+    /// Binary-packed version of `read_lines_by_indices`. Same wire format
+    /// as `read_lines_packed`.
+    pub fn read_lines_by_indices_packed(&self, indices: &[u32]) -> Result<Vec<u8>> {
+        let ofs = self.offsets.read();
+        let mmap = self.mmap.read();
+        let n = if ofs.len() <= 1 { 0 } else { ofs.len() - 1 };
+
+        let mut out: Vec<u8> = Vec::with_capacity(4 + indices.len() * 80);
+        out.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+
+        for &idx in indices {
+            let i = idx as usize;
+            if i >= n {
+                out.extend_from_slice(&0u32.to_le_bytes());
+                continue;
+            }
+            let lo = ofs[i] as usize;
+            let hi = ofs[i + 1] as usize;
+            let slice = &mmap[lo..hi];
+            let trimmed = strip_eol(slice);
+            let (cow, _, _) = self.encoding.decode(trimmed);
+            write_sanitized(&mut out, cow.as_ref());
+        }
+        Ok(out)
+    }
+
     /// Read raw bytes of line `idx` (without decoding), used for search.
     pub fn line_bytes<'a>(&self, mmap: &'a [u8], idx: usize) -> Option<&'a [u8]> {
         let ofs = self.offsets.read();
@@ -220,6 +288,52 @@ fn sanitize(s: &str) -> String {
         }
     }
     out
+}
+
+/// Like [`sanitize`] but streams directly into a byte buffer, preceded by a
+/// u32 little-endian length. Used by the binary-packed read paths so we
+/// don't allocate an intermediate `String` per line.
+fn write_sanitized(out: &mut Vec<u8>, s: &str) {
+    // Reserve a slot for the length; we'll patch it after encoding.
+    let len_pos = out.len();
+    out.extend_from_slice(&0u32.to_le_bytes());
+
+    let start = out.len();
+    // Fast ASCII path: if the whole string is ASCII with no tabs/controls
+    // we can copy wholesale. This covers most log lines.
+    let bytes = s.as_bytes();
+    let mut all_ascii_clean = true;
+    for &b in bytes {
+        if b == b'\t' || b < 0x20 || b == 0x7F {
+            all_ascii_clean = false;
+            break;
+        }
+        if b >= 0x80 {
+            // Might still be clean UTF-8 multi-byte; fall through to the
+            // slow path to handle control chars embedded in non-ASCII text.
+            all_ascii_clean = false;
+            break;
+        }
+    }
+    if all_ascii_clean {
+        out.extend_from_slice(bytes);
+    } else {
+        // Buffer tab expansion inline, drop bad controls.
+        let mut tmp = [0u8; 4];
+        for c in s.chars() {
+            match c {
+                '\t' => out.extend_from_slice(b"    "),
+                '\0'..='\u{0008}' | '\u{000B}'..='\u{001F}' | '\u{007F}' => {}
+                _ => {
+                    let encoded = c.encode_utf8(&mut tmp);
+                    out.extend_from_slice(encoded.as_bytes());
+                }
+            }
+        }
+    }
+
+    let written = (out.len() - start) as u32;
+    out[len_pos..len_pos + 4].copy_from_slice(&written.to_le_bytes());
 }
 
 /// Look up the line number containing a given absolute byte offset.

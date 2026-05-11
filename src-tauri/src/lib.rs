@@ -13,6 +13,7 @@ use dashmap::DashMap;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tauri::ipc::Response;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
@@ -104,6 +105,51 @@ async fn read_lines_by_indices(
         .map_err(|e| format!("{e}"))
 }
 
+/// Binary-packed variant of [`read_lines`]. Returns a raw byte buffer shaped
+/// as `[u32 count] ([u32 byte_len] [utf-8 bytes])*`, bypassing JSON.
+/// This is the hot path for the frontend's scroll prefetcher.
+#[tauri::command]
+async fn read_lines_bin(
+    state: State<'_, AppState>,
+    id: String,
+    start: usize,
+    end: usize,
+) -> Result<Response, String> {
+    let file = state
+        .files
+        .get(&id)
+        .ok_or_else(|| "file not open".to_string())?
+        .clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        file.read_lines_packed(start, end)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
+    .map_err(|e| format!("{e}"))?;
+    Ok(Response::new(bytes))
+}
+
+/// Binary-packed variant of [`read_lines_by_indices`].
+#[tauri::command]
+async fn read_lines_by_indices_bin(
+    state: State<'_, AppState>,
+    id: String,
+    indices: Vec<u32>,
+) -> Result<Response, String> {
+    let file = state
+        .files
+        .get(&id)
+        .ok_or_else(|| "file not open".to_string())?
+        .clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        file.read_lines_by_indices_packed(&indices)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
+    .map_err(|e| format!("{e}"))?;
+    Ok(Response::new(bytes))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn filter_lines(
     state: State<'_, AppState>,
@@ -183,6 +229,8 @@ pub fn run() {
             close_file,
             read_lines,
             read_lines_by_indices,
+            read_lines_bin,
+            read_lines_by_indices_bin,
             filter_lines,
             search_file,
             start_tail,

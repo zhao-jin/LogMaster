@@ -53,14 +53,52 @@ export async function readLines(
   start: number,
   end: number
 ): Promise<LineRange> {
-  return invoke<LineRange>("read_lines", { id, start, end });
+  // Prefer the binary-packed path — ~3-5x faster than JSON invoke on
+  // 2000-line chunks because we skip string allocation and JSON
+  // serialization on both sides.
+  const buf = await invoke<ArrayBuffer>("read_lines_bin", { id, start, end });
+  const lines = unpackLines(buf);
+  return { start, end: start + lines.length, lines };
 }
 
 export async function readLinesByIndices(
   id: string,
   indices: number[]
 ): Promise<string[]> {
-  return invoke<string[]>("read_lines_by_indices", { id, indices });
+  const buf = await invoke<ArrayBuffer>("read_lines_by_indices_bin", {
+    id,
+    indices,
+  });
+  return unpackLines(buf);
+}
+
+/**
+ * Decode the binary wire format produced by the Rust `*_packed` functions:
+ *   [u32 count] ([u32 byte_len] [utf-8 bytes])*     (all little-endian)
+ *
+ * Uses a single shared `TextDecoder`; `TextDecoder.decode` accepts a view
+ * into the source buffer without copying, which makes this roughly as
+ * fast as we can do string creation from bytes in the browser.
+ */
+const TEXT_DECODER = new TextDecoder("utf-8", { fatal: false });
+function unpackLines(buf: ArrayBuffer): string[] {
+  const view = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+  const count = view.getUint32(0, true);
+  const out = new Array<string>(count);
+  let off = 4;
+  for (let i = 0; i < count; i++) {
+    const len = view.getUint32(off, true);
+    off += 4;
+    if (len === 0) {
+      out[i] = "";
+    } else {
+      // subarray is a view, not a copy — TextDecoder.decode handles it.
+      out[i] = TEXT_DECODER.decode(bytes.subarray(off, off + len));
+      off += len;
+    }
+  }
+  return out;
 }
 
 export interface FilterRuleDto {
