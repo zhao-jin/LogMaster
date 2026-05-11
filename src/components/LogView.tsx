@@ -11,6 +11,25 @@ import { LineContextMenu, type LineMenuTarget } from "./LineContextMenu";
 // under 10ms for typical log lines.
 const CHUNK = 2000;
 
+// Cap the cache to avoid unbounded memory growth on huge files. We keep
+// the most recently TOUCHED chunks and evict the rest. 200 chunks @ 2000
+// lines/chunk = 400k lines of decoded text in memory.
+const MAX_CACHED_CHUNKS = 200;
+
+// Pseudo-text used as a "ghost" placeholder when a row's chunk hasn't
+// arrived yet. We pre-compute a long string of block characters at varied
+// densities so each row visually looks like "code that's still loading"
+// instead of an empty/blank row. Width per row is randomized so the
+// silhouette resembles real log lines (some short, some long).
+const GHOST_CHARS = "▆▇█▇▆▅▆▇█▆▇▆▅▇█▇▆█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▇█▇▆▅▆▇█▇▆▅▆▇▆▅▇█▇▆";
+function ghostFor(viewIdx: number): string {
+  // Deterministic length per row so the same row keeps the same width
+  // when it briefly disappears and reappears in the viewport.
+  const seed = (viewIdx * 2654435761) >>> 0; // Knuth multiplicative hash
+  const len = 18 + (seed % 60); // 18..78 chars
+  return GHOST_CHARS.slice(0, len);
+}
+
 // LRU-ish per-file chunk cache: chunkIdx -> lines[]
 // NB: chunkIdx is based on *view* indices (not physical) so we key per-tab+view.
 const fileCache = new Map<string, Map<number, string[]>>();
@@ -21,6 +40,18 @@ function getCache(id: string) {
     fileCache.set(id, c);
   }
   return c;
+}
+function touchAndCache(id: string, chunkIdx: number, lines: string[]) {
+  const c = getCache(id);
+  // delete-then-set bumps insertion order → Map preserves LRU order.
+  if (c.has(chunkIdx)) c.delete(chunkIdx);
+  c.set(chunkIdx, lines);
+  // Evict oldest if over budget.
+  while (c.size > MAX_CACHED_CHUNKS) {
+    const oldest = c.keys().next().value;
+    if (oldest === undefined) break;
+    c.delete(oldest);
+  }
 }
 export function clearFileCache(id: string) {
   fileCache.delete(id);
@@ -120,12 +151,15 @@ export function LogView({
     if (its.length === 0) return;
     const first = its[0].index;
     const last = its[its.length - 1].index;
-    const firstChunk = Math.floor(first / CHUNK);
-    const lastChunk = Math.floor(last / CHUNK);
+    // Prefetch one chunk on each side too so that small mouse-wheel ticks
+    // never reveal an unloaded edge.
+    const firstChunk = Math.max(0, Math.floor(first / CHUNK) - 1);
+    const lastChunk = Math.floor(last / CHUNK) + 1;
     const cache = getCache(fileId);
     const flight = getInflight();
+    const totalChunks = Math.ceil(totalRows / CHUNK);
     const toLoad: number[] = [];
-    for (let c = firstChunk; c <= lastChunk; c++) {
+    for (let c = firstChunk; c <= Math.min(lastChunk, totalChunks - 1); c++) {
       if (!cache.has(c) && !flight.has(c)) toLoad.push(c);
     }
     if (toLoad.length === 0) return;
@@ -144,10 +178,10 @@ export function LogView({
             const r = await readLines(fileId, startV, endV);
             lines = r.lines;
           }
-          cache.set(c, lines);
+          touchAndCache(fileId, c, lines);
         } catch (e) {
           console.error("readLines failed", e);
-          cache.set(c, []);
+          touchAndCache(fileId, c, []);
         } finally {
           flight.delete(c);
           scheduleForce();
@@ -329,17 +363,21 @@ export function LogView({
 
               <div
                 className={
-                  "flex-1 min-w-0 pl-3 pr-2 overflow-hidden whitespace-pre text-fg " +
-                  (isSearchHit ? "bg-brand/10" : "")
+                  "flex-1 min-w-0 pl-3 pr-2 overflow-hidden whitespace-pre " +
+                  (text === undefined ? "select-none" : "text-fg") +
+                  (isSearchHit ? " bg-brand/10" : "")
+                }
+                style={
+                  text === undefined ? { color: "#334155" } : undefined
                 }
               >
                 {text === undefined ? (
-                  // Render nothing visible while loading. Keeping the row
-                  // slot empty (instead of a shimmer/skeleton) avoids the
-                  // "flashing blank" perception during fast drag-scroll —
-                  // the row is just dark like the surrounding gutter until
-                  // the chunk arrives one frame later.
-                  <span aria-label="loading">&nbsp;</span>
+                  // Ghost row: a row of dim block characters that looks like
+                  // a "code line still loading", so the viewport never shows
+                  // empty/blank rows during fast drag-scroll. The content
+                  // swaps to real text in-place once the chunk arrives —
+                  // the row never disappears or flashes.
+                  <span aria-hidden="true">{ghostFor(viewIdx)}</span>
                 ) : (
                   renderLine(
                     text,
