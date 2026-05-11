@@ -28,3 +28,6 @@ vite.err
 # tsc -b emit artifacts for the node-side config project
 vite.config.js
 vite.config.d.ts
+
+# Local bundle output (copied from src-tauri/target/release/bundle)
+dist-bundle/
