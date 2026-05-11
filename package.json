@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "kill:port": "node scripts/kill-port.mjs 1420",
     "tauri:dev": "node scripts/kill-port.mjs 1420 && tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build && node scripts/copy-portable.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.8",
