@@ -6,7 +6,10 @@ import { useAppStore, type BookmarkEntry } from "../store/app";
 import { useSettingsStore } from "../store/settings";
 import { LineContextMenu, type LineMenuTarget } from "./LineContextMenu";
 
-const CHUNK = 500;
+// Larger chunks → fewer cache-miss boundaries while scrolling, and much
+// fewer IPC calls overall. Rust read is O(n), so 2000 is still well
+// under 10ms for typical log lines.
+const CHUNK = 2000;
 
 // LRU-ish per-file chunk cache: chunkIdx -> lines[]
 // NB: chunkIdx is based on *view* indices (not physical) so we key per-tab+view.
@@ -54,15 +57,15 @@ export function LogView({
   const lineHeight = useSettingsStore((s) => s.lineHeight);
   const showLineNumbers = useSettingsStore((s) => s.showLineNumbers);
 
-  const setScrollPosition = useAppStore(
-    (s) => s.setScrollPosition ?? (() => {})
+  // Subscribe to the raw rules array (stable identity unless rules actually
+  // change), then filter in a memo. If we filtered inside the selector the
+  // array reference would change every render and trigger re-renders of
+  // LogView on *any* store write.
+  const allRules = useAppStore((s) => s.rules);
+  const rules = useMemo(
+    () => allRules.filter((r) => r.enabled && r.highlight && r.pattern.length > 0),
+    [allRules]
   );
-
-  const rules = useAppStore((s) =>
-    s.rules.filter((r) => r.enabled && r.highlight && r.pattern.length > 0)
-  );
-  const searchHitsByLine = useAppStore((s) => s as unknown as never); // placeholder; see App.tsx-provided hits
-  void searchHitsByLine;
 
   const totalRows = visibleLines ? visibleLines.length : lineCount;
 
@@ -79,7 +82,7 @@ export function LogView({
     count: totalRows,
     getScrollElement: () => parentRef.current,
     estimateSize: () => lineHeight,
-    overscan: 60,
+    overscan: 200,
   });
 
   // Track which chunks are currently being fetched so concurrent effect runs
@@ -94,9 +97,23 @@ export function LogView({
     return s;
   }
 
+  // Coalesce re-renders caused by chunk-fill. When many chunks resolve in
+  // the same frame we only bump React state once. Without this, each chunk
+  // return triggered a full LogView re-render (hundreds of DOM nodes),
+  // which during drag-scroll on Webview2 produced the "flashing blank".
+  const forcePending = useRef(false);
+  function scheduleForce() {
+    if (forcePending.current) return;
+    forcePending.current = true;
+    requestAnimationFrame(() => {
+      forcePending.current = false;
+      force((n) => n + 1);
+    });
+  }
+
   // Imperative prefetch: load any missing chunks for the currently-visible
-  // virtual range. Called both from the prefetch effect (when items change)
-  // and from the scroll-end timer (after fast scrolling settles).
+  // virtual range. Called from the scroll handler (rAF-coalesced) and from
+  // the items-changed effect.
   const prefetchVisible = useRef<() => void>(() => {});
   prefetchVisible.current = () => {
     const its = virtualizer.getVirtualItems();
@@ -128,75 +145,61 @@ export function LogView({
             lines = r.lines;
           }
           cache.set(c, lines);
-          force((n) => n + 1);
         } catch (e) {
           console.error("readLines failed", e);
           cache.set(c, []);
-          force((n) => n + 1);
         } finally {
           flight.delete(c);
+          scheduleForce();
         }
       })();
     }
   };
 
-  // Track scroll velocity. While the user drags fast we skip prefetch; once
-  // they pause for ~80ms we load only the chunks that are *still* visible.
-  const isFastScrolling = useRef(false);
+  // rAF-coalesce scroll-triggered prefetches so we do at most one scan
+  // per frame, regardless of how many scroll events fire.
+  const rafPending = useRef(false);
+  function requestPrefetch() {
+    if (rafPending.current) return;
+    rafPending.current = true;
+    requestAnimationFrame(() => {
+      rafPending.current = false;
+      prefetchVisible.current();
+    });
+  }
   useEffect(() => {
     const el = parentRef.current;
     if (!el) return;
-    let lastY = el.scrollTop;
-    let lastT = performance.now();
-    let resetTimer: number | null = null;
     function onScroll() {
-      const now = performance.now();
-      const dy = Math.abs(el!.scrollTop - lastY);
-      const dt = now - lastT;
-      if (dt > 0 && dy / dt > 1.5) {
-        isFastScrolling.current = true;
+      // Report scroll position via getState() — NOT a subscription — so we
+      // don't re-render LogView every time the store broadcasts.
+      const its = virtualizer.getVirtualItems();
+      if (its.length > 0) {
+        const first = its[0].index;
+        const last = its[its.length - 1].index;
+        const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
+        const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
+        useAppStore.getState().setScrollPosition(topPhys, botPhys);
       }
-      lastY = el!.scrollTop;
-      lastT = now;
-      if (resetTimer != null) clearTimeout(resetTimer);
-      resetTimer = window.setTimeout(() => {
-        isFastScrolling.current = false;
-        // Imperative: load chunks for the *current* visible range.
-        prefetchVisible.current();
-      }, 80);
+      requestPrefetch();
     }
     el.addEventListener("scroll", onScroll, { passive: true });
-    // After a window/panel resize, the visible row count might grow and need
-    // new chunks. Trigger an imperative prefetch on resize as well.
     const ro = new ResizeObserver(() => {
-      // Defer one frame so the virtualizer has a chance to recompute items.
       requestAnimationFrame(() => prefetchVisible.current());
     });
     ro.observe(el);
     return () => {
       el.removeEventListener("scroll", onScroll);
       ro.disconnect();
-      if (resetTimer != null) clearTimeout(resetTimer);
     };
-  }, []);
+  }, [virtualizer, visibleLines]);
 
-  // Reactive prefetch when items change (initial mount, resize, jumps).
+  // Initial prefetch on mount / when data shape changes. No longer calls
+  // setScrollPosition from the render path.
   const items = virtualizer.getVirtualItems();
   useEffect(() => {
-    if (items.length === 0) {
-      setScrollPosition(0, 0);
-      return;
-    }
-    const first = items[0].index;
-    const last = items[items.length - 1].index;
-
-    const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
-    const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
-    setScrollPosition(topPhys, botPhys);
-
-    if (isFastScrolling.current) return;
     prefetchVisible.current();
-  }, [items, fileId, totalRows, visibleLines, setScrollPosition]);
+  }, [fileId, totalRows, visibleLines]);
 
   // Follow tail: scroll to bottom when line count grows
   useEffect(() => {
@@ -209,7 +212,6 @@ export function LogView({
     if (scrollTo == null) return;
     let viewIdx: number;
     if (visibleLines) {
-      // Binary search on Uint32Array
       viewIdx = binarySearch(visibleLines, scrollTo);
       if (viewIdx < 0) viewIdx = Math.max(0, -viewIdx - 1);
     } else {
@@ -243,7 +245,14 @@ export function LogView({
     <div
       ref={parentRef}
       className="h-full w-full overflow-auto font-mono bg-bg"
-      style={{ fontSize: `${fontSize}px`, lineHeight: `${lineHeight}px` }}
+      style={{
+        fontSize: `${fontSize}px`,
+        lineHeight: `${lineHeight}px`,
+        // Hint the compositor that this element's contents will change
+        // rapidly. Prevents the entire scroll container from being
+        // re-painted on every scroll tick.
+        contain: "strict",
+      }}
       tabIndex={0}
     >
       <div
@@ -266,7 +275,7 @@ export function LogView({
           return (
             <div
               key={vi.key}
-              className="absolute left-0 right-0 flex hover:bg-bg-hover/40 transition-colors"
+              className="absolute left-0 right-0 flex hover:bg-bg-hover/40"
               style={{
                 transform: `translateY(${vi.start}px)`,
                 height: `${vi.size}px`,
@@ -282,11 +291,9 @@ export function LogView({
                 });
               }}
             >
-              {/* Bookmark gutter — always shows a faint icon so users
-                  discover the click target. */}
               <button
                 onClick={() => onToggleBookmark(physIdx)}
-                className="group/gutter shrink-0 w-6 flex items-center justify-center hover:bg-bg-hover transition-colors"
+                className="group/gutter shrink-0 w-6 flex items-center justify-center hover:bg-bg-hover"
                 title={
                   bookmark
                     ? `${bookmark.name} (line ${physIdx + 1}) — click to remove`
@@ -295,7 +302,7 @@ export function LogView({
               >
                 <Bookmark
                   className={
-                    "w-3.5 h-3.5 transition-all " +
+                    "w-3.5 h-3.5 " +
                     (bookmark
                       ? ""
                       : "text-fg-subtle/30 group-hover/gutter:text-brand group-hover/gutter:fill-brand/40")
@@ -308,14 +315,11 @@ export function LogView({
                 />
               </button>
 
-              {/* Line number */}
               {showLineNumbers && (
                 <div
                   className={
                     "shrink-0 text-right pr-3 pl-1 select-none border-r border-border " +
-                    (isSearchHit
-                      ? "text-fg bg-brand/20"
-                      : "text-fg-subtle")
+                    (isSearchHit ? "text-fg bg-brand/20" : "text-fg-subtle")
                   }
                   style={{ width: lineNumWidth }}
                 >
@@ -323,7 +327,6 @@ export function LogView({
                 </div>
               )}
 
-              {/* Content */}
               <div
                 className={
                   "flex-1 min-w-0 pl-3 pr-2 overflow-hidden whitespace-pre text-fg " +
@@ -331,10 +334,12 @@ export function LogView({
                 }
               >
                 {text === undefined ? (
-                  <span
-                    className="inline-block h-[60%] w-[40%] rounded bg-bg-elevated/60 align-middle animate-pulse"
-                    aria-label="loading"
-                  />
+                  // Render nothing visible while loading. Keeping the row
+                  // slot empty (instead of a shimmer/skeleton) avoids the
+                  // "flashing blank" perception during fast drag-scroll —
+                  // the row is just dark like the surrounding gutter until
+                  // the chunk arrives one frame later.
+                  <span aria-label="loading">&nbsp;</span>
                 ) : (
                   renderLine(
                     text,
