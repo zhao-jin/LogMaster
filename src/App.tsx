@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
 import { TopBar } from "./components/TopBar";
 import { TabBar } from "./components/TabBar";
 import { LogView } from "./components/LogView";
@@ -6,6 +5,8 @@ import { StatusBar } from "./components/StatusBar";
 import { RulesPanel } from "./components/RulesPanel";
 import { BookmarksPanel } from "./components/BookmarksPanel";
 import { ResizableSidePanel } from "./components/ResizableSidePanel";
+import { ResizableLeftPanel } from "./components/ResizableLeftPanel";
+import { FileExplorer } from "./components/FileExplorer";
 import { CommandPalette } from "./components/CommandPalette";
 import { FilterBanner } from "./components/FilterBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -13,6 +14,7 @@ import { FolderBrowser } from "./components/FolderBrowser";
 import { Welcome } from "./components/Welcome";
 import { useAppStore } from "./store/app";
 import { useRecentStore } from "./store/recent";
+import { useSettingsStore } from "./store/settings";
 import { onTail, openFile } from "./lib/ipc";
 import { openDialog } from "./lib/dialog";
 import { useFilter } from "./hooks/useFilter";
@@ -20,6 +22,7 @@ import { useSearch } from "./hooks/useSearch";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { closeFile, stopTail } from "./lib/ipc";
 import { clearFileCache } from "./components/LogView";
+import { useCallback, useEffect, useState } from "react";
 
 type SidePanel = "rules" | "bookmarks" | null;
 
@@ -39,6 +42,14 @@ export default function App() {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [folderBrowser, setFolderBrowser] = useState<string | null>(null);
+
+  // Left-side file explorer — persisted open/closed state.
+  const leftOpen = useSettingsStore((s) => s.leftPanelOpen);
+  const setSetting = useSettingsStore((s) => s.set);
+  const toggleLeft = useCallback(
+    () => setSetting("leftPanelOpen", !leftOpen),
+    [leftOpen, setSetting]
+  );
 
   useFilter();
   const search = useSearch();
@@ -109,7 +120,7 @@ export default function App() {
       if (
         mod &&
         !e.altKey &&
-        ["f", "g", "p"].includes(e.key.toLowerCase())
+        ["f", "g", "p", "b"].includes(e.key.toLowerCase())
       ) {
         if (!(e.shiftKey && e.key.toLowerCase() === "p")) {
           e.preventDefault();
@@ -120,6 +131,9 @@ export default function App() {
       if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setCmdOpen(true);
+      } else if (mod && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleLeft();
       } else if (mod && e.key === ",") {
         e.preventDefault();
         setSettingsOpen(true);
@@ -199,6 +213,7 @@ export default function App() {
     setSearchCase,
     searchWholeWord,
     setSearchWholeWord,
+    toggleLeft,
   ]);
 
   return (
@@ -213,6 +228,8 @@ export default function App() {
         onToggleBookmarks={() =>
           setSide((v) => (v === "bookmarks" ? null : "bookmarks"))
         }
+        onToggleLeft={toggleLeft}
+        leftOpen={leftOpen}
         hitCount={search.hits.length}
         hitIndex={search.index}
         onNextHit={() => search.next()}
@@ -220,6 +237,9 @@ export default function App() {
       />
       <TabBar />
       <div className="flex-1 flex min-h-0">
+        <ResizableLeftPanel open={leftOpen}>
+          <FileExplorer />
+        </ResizableLeftPanel>
         <div className="flex-1 min-w-0 flex flex-col">
           <FilterBanner onOpenRules={() => setSide("rules")} />
           {active ? (
@@ -260,6 +280,7 @@ export default function App() {
         onToggleBookmarks={() =>
           setSide((v) => (v === "bookmarks" ? null : "bookmarks"))
         }
+        onToggleLeft={toggleLeft}
       />
       <SettingsPanel
         open={settingsOpen}

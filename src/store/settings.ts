@@ -15,6 +15,10 @@ export interface Settings {
   tailIntervalMs: number;
   /** Right-side panel width in px (rules / bookmarks). */
   sidePanelWidth: number;
+  /** Left-side panel (file explorer) width in px. */
+  leftPanelWidth: number;
+  /** Whether the left file-explorer panel is visible. */
+  leftPanelOpen: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -27,6 +31,8 @@ export const DEFAULT_SETTINGS: Settings = {
   searchMaxHits: 5000,
   tailIntervalMs: 33,
   sidePanelWidth: 380,
+  leftPanelWidth: 280,
+  leftPanelOpen: true,
 };
 
 interface SettingsState extends Settings {
@@ -44,7 +50,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "logmaster:settings",
       storage: createJSONStorage(() => localStorage),
-      version: 2,
+      version: 3,
       migrate: (state) => ({ ...DEFAULT_SETTINGS, ...(state as object) }),
     }
   )

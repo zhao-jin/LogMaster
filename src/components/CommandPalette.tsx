@@ -2,6 +2,7 @@ import { Command } from "cmdk";
 import { useEffect } from "react";
 import {
   FolderOpen,
+  PanelLeft,
   Radio,
   Settings2,
   Bookmark,
@@ -17,6 +18,7 @@ interface Props {
   onClose: () => void;
   onToggleRules: () => void;
   onToggleBookmarks: () => void;
+  onToggleLeft: () => void;
 }
 
 export function CommandPalette({
@@ -24,6 +26,7 @@ export function CommandPalette({
   onClose,
   onToggleRules,
   onToggleBookmarks,
+  onToggleLeft,
 }: Props) {
   const { addTab, tabs, activeId, updateTab, filterEnabled, setFilterEnabled } =
     useAppStore();
@@ -127,6 +130,16 @@ export function CommandPalette({
                 }}
               >
                 Toggle bookmarks panel
+              </Item>
+              <Item
+                icon={<PanelLeft className="w-4 h-4" />}
+                shortcut="Ctrl+B"
+                onSelect={() => {
+                  onClose();
+                  onToggleLeft();
+                }}
+              >
+                Toggle file explorer
               </Item>
             </Command.Group>
           </Command.List>

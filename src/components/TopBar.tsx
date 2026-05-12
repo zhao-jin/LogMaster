@@ -11,6 +11,7 @@ import {
   FolderTree,
   History,
   Minus,
+  PanelLeft,
   Radio,
   RadioTower,
   Regex,
@@ -57,6 +58,8 @@ interface Props {
   onOpenCmd: () => void;
   onToggleRules: () => void;
   onToggleBookmarks: () => void;
+  onToggleLeft: () => void;
+  leftOpen: boolean;
   hitCount: number;
   hitIndex: number;
   onPrevHit: () => void;
@@ -69,6 +72,8 @@ export function TopBar({
   onOpenCmd,
   onToggleRules,
   onToggleBookmarks,
+  onToggleLeft,
+  leftOpen,
   hitCount,
   hitIndex,
   onPrevHit,
@@ -184,6 +189,15 @@ export function TopBar({
         <Zap className="w-4 h-4 text-accent" />
         <span className="text-sm font-semibold text-fg">LogMaster</span>
       </div>
+
+      {/* Toggle file explorer */}
+      <ToggleBtn
+        active={leftOpen}
+        onClick={onToggleLeft}
+        title="Toggle file explorer (Ctrl+B)"
+      >
+        <PanelLeft className="w-4 h-4" />
+      </ToggleBtn>
 
       {/* File menu */}
       <Dropdown
