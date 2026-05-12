@@ -238,7 +238,7 @@ export default function App() {
       <TabBar />
       <div className="flex-1 flex min-h-0">
         <ResizableLeftPanel open={leftOpen}>
-          <FileExplorer />
+          <FileExplorer onOpenFolderBrowser={(p) => setFolderBrowser(p)} />
         </ResizableLeftPanel>
         <div className="flex-1 min-w-0 flex flex-col">
           <FilterBanner onOpenRules={() => setSide("rules")} />

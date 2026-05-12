@@ -1,44 +1,179 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ChevronRight,
+  Copy,
   FileText,
-  Folder as FolderIcon,
+  FilePlus,
   FolderOpen,
   FolderPlus,
+  Folder as FolderIcon,
   RefreshCw,
+  Trash2,
   X,
-  FilePlus,
+  ExternalLink,
+  Pin,
 } from "lucide-react";
 import { listDir, openFile, type DirEntryInfo } from "../lib/ipc";
 import { openDialog, openFolderDialog } from "../lib/dialog";
 import { useAppStore } from "../store/app";
 import { useRecentStore } from "../store/recent";
-import { cn } from "../lib/utils";
+import { cn, formatRelativeTime } from "../lib/utils";
 
 /* ------------------------------------------------------------------ */
-/*  Left-side File Explorer                                           */
+/*  Multi-select context                                              */
 /*                                                                    */
-/*  Two sections:                                                     */
-/*   1. "Open Files"  — current tabs, click to activate               */
-/*   2. "Folders"     — persistent folder roots, tree expand/collapse */
-/*                                                                    */
-/*  All tree state is local (per LogMaster session). Folder roots     */
-/*  themselves persist via useRecentStore.                             */
+/*  We keep the selection in a Set keyed by file path. Anchor is the  */
+/*  last single-clicked file, used for shift-range selection within a */
+/*  flat list. Range select only works among siblings of the same     */
+/*  expanded directory (most natural UX), so we also track the anchor */
+/*  list (an ordered list of paths from the same parent).             */
 /* ------------------------------------------------------------------ */
 
-export function FileExplorer() {
+interface SelectionCtx {
+  selected: ReadonlySet<string>;
+  isSelected: (path: string) => boolean;
+  /** Apply a single-click selection. Modifier-aware. */
+  click: (
+    path: string,
+    siblings: string[],
+    e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }
+  ) => void;
+  /** Replace selection with the single given path. */
+  selectOnly: (path: string) => void;
+  clear: () => void;
+}
+
+const SelectionContext = createContext<SelectionCtx | null>(null);
+function useSelection() {
+  const ctx = useContext(SelectionContext);
+  if (!ctx) throw new Error("SelectionContext missing");
+  return ctx;
+}
+
+interface MenuState {
+  x: number;
+  y: number;
+  /** All files this menu acts on. For root folder: empty (root menu). */
+  paths: string[];
+  /** Path of the row that was right-clicked (for "Reveal" etc.) */
+  primary: string;
+  /** Whether the right-clicked row is a folder. */
+  isFolder: boolean;
+  /** Whether the right-clicked row is a workspace root. */
+  isRoot: boolean;
+  /** Refresh the directory the row belongs to. */
+  onRefresh?: () => void;
+  /** Remove a workspace root. */
+  onRemoveRoot?: () => void;
+  /** Reveal in folder browser modal (full path). */
+  onReveal?: (path: string) => void;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Top-level explorer                                                */
+/* ------------------------------------------------------------------ */
+
+interface ExplorerProps {
+  onOpenFolderBrowser?: (path: string) => void;
+}
+
+export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const anchor = useRef<{ path: string; siblings: string[] } | null>(null);
+
+  const click = useCallback<SelectionCtx["click"]>((path, siblings, e) => {
+    setSelected((prev) => {
+      const mod = e.ctrlKey || e.metaKey;
+      // Shift-range within siblings (same parent).
+      if (e.shiftKey && anchor.current) {
+        const list = anchor.current.siblings;
+        const ai = list.indexOf(anchor.current.path);
+        const bi = list.indexOf(path);
+        if (ai >= 0 && bi >= 0) {
+          const [lo, hi] = ai < bi ? [ai, bi] : [bi, ai];
+          const next = new Set(mod ? prev : []);
+          for (let i = lo; i <= hi; i++) next.add(list[i]);
+          return next;
+        }
+      }
+      if (mod) {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path);
+        else next.add(path);
+        anchor.current = { path, siblings };
+        return next;
+      }
+      // Plain click: replace selection.
+      anchor.current = { path, siblings };
+      return new Set([path]);
+    });
+  }, []);
+
+  const selectOnly = useCallback((path: string) => {
+    anchor.current = { path, siblings: [path] };
+    setSelected(new Set([path]));
+  }, []);
+
+  const clear = useCallback(() => {
+    anchor.current = null;
+    setSelected(new Set());
+  }, []);
+
+  const ctx = useMemo<SelectionCtx>(
+    () => ({
+      selected,
+      isSelected: (p) => selected.has(p),
+      click,
+      selectOnly,
+      clear,
+    }),
+    [selected, click, selectOnly, clear]
+  );
+
+  const [menu, setMenu] = useState<MenuState | null>(null);
+
   return (
-    <aside className="h-full flex flex-col bg-bg-panel text-sm">
-      <header className="flex items-center gap-1 px-2 h-9 border-b border-border shrink-0">
-        <FolderOpen className="w-4 h-4 text-brand" />
-        <span className="text-sm font-semibold text-fg">Explorer</span>
-      </header>
+    <SelectionContext.Provider value={ctx}>
+      <aside
+        className="h-full flex flex-col bg-bg-panel text-sm"
+        onClick={(e) => {
+          // Click on empty area clears selection
+          if (e.target === e.currentTarget) clear();
+        }}
+      >
+        <header className="flex items-center gap-1 px-2 h-9 border-b border-border shrink-0">
+          <FolderOpen className="w-4 h-4 text-brand" />
+          <span className="text-sm font-semibold text-fg">Explorer</span>
+          {selected.size > 1 && (
+            <span className="ml-auto text-[10px] text-brand tabular-nums">
+              {selected.size} selected
+            </span>
+          )}
+        </header>
 
-      <div className="flex-1 overflow-auto">
-        <OpenFilesSection />
-        <FoldersSection />
-      </div>
-    </aside>
+        <div className="flex-1 overflow-auto">
+          <OpenFilesSection />
+          <FoldersSection
+            onContextMenu={setMenu}
+            onOpenInBrowser={onOpenFolderBrowser}
+          />
+        </div>
+
+        <FileContextMenu
+          target={menu}
+          onClose={() => setMenu(null)}
+          selectionPaths={Array.from(selected)}
+        />
+      </aside>
+    </SelectionContext.Provider>
   );
 }
 
@@ -135,7 +270,15 @@ function OpenFilesSection() {
 /*  Section 2: Folders (tree)                                         */
 /* ------------------------------------------------------------------ */
 
-function FoldersSection() {
+interface FoldersSectionProps {
+  onContextMenu: (m: MenuState) => void;
+  onOpenInBrowser?: (path: string) => void;
+}
+
+function FoldersSection({
+  onContextMenu,
+  onOpenInBrowser,
+}: FoldersSectionProps) {
   const folders = useRecentStore((s) => s.folders);
   const removeFolder = useRecentStore((s) => s.removeFolder);
   const pushFolder = useRecentStore((s) => s.pushFolder);
@@ -181,6 +324,8 @@ function FoldersSection() {
                 depth={0}
                 isRoot
                 onRemoveRoot={() => removeFolder(f.path)}
+                onOpenInBrowser={onOpenInBrowser}
+                onContextMenu={onContextMenu}
               />
             ))
           )}
@@ -200,6 +345,8 @@ interface FolderNodeProps {
   depth: number;
   isRoot?: boolean;
   onRemoveRoot?: () => void;
+  onOpenInBrowser?: (path: string) => void;
+  onContextMenu: (m: MenuState) => void;
 }
 
 function FolderTreeNode({
@@ -208,6 +355,8 @@ function FolderTreeNode({
   depth,
   isRoot = false,
   onRemoveRoot,
+  onOpenInBrowser,
+  onContextMenu,
 }: FolderNodeProps) {
   const [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<DirEntryInfo[] | null>(null);
@@ -219,11 +368,8 @@ function FolderTreeNode({
     setError(null);
     try {
       const es = await listDir(path);
-      // Folders first, then files; each alphabetic.
-      es.sort((a, b) => {
-        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
+      // Backend already sorts: folders first, then files by modified desc.
+      // Trust it — DON'T re-sort alphabetically here.
       setEntries(es);
     } catch (e) {
       setError(String(e));
@@ -238,6 +384,28 @@ function FolderTreeNode({
     }
   }, [expanded, entries, loading, load]);
 
+  // Children files in display order — used as siblings for shift-range.
+  const fileSiblings = useMemo(
+    () => (entries ?? []).filter((e) => !e.is_dir).map((e) => e.path),
+    [entries]
+  );
+
+  function handleContext(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    onContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      paths: [],
+      primary: path,
+      isFolder: true,
+      isRoot,
+      onRefresh: load,
+      onRemoveRoot: isRoot ? onRemoveRoot : undefined,
+      onReveal: onOpenInBrowser,
+    });
+  }
+
   return (
     <div>
       <FolderRow
@@ -247,6 +415,7 @@ function FolderTreeNode({
         isRoot={isRoot}
         loading={loading}
         onClick={() => setExpanded((v) => !v)}
+        onContextMenu={handleContext}
         onRefresh={load}
         onRemoveRoot={onRemoveRoot}
         title={path}
@@ -285,13 +454,17 @@ function FolderTreeNode({
                 path={e.path}
                 name={e.name}
                 depth={depth + 1}
+                onContextMenu={onContextMenu}
+                onOpenInBrowser={onOpenInBrowser}
               />
             ) : (
               <FileNodeRow
                 key={e.path}
-                path={e.path}
-                name={e.name}
+                entry={e}
                 depth={depth + 1}
+                siblings={fileSiblings}
+                onRefreshDir={load}
+                onContextMenu={onContextMenu}
               />
             )
           )}
@@ -309,6 +482,7 @@ function FolderRow({
   loading,
   title,
   onClick,
+  onContextMenu,
   onRefresh,
   onRemoveRoot,
 }: {
@@ -319,12 +493,14 @@ function FolderRow({
   loading: boolean;
   title: string;
   onClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
   onRefresh: () => void;
   onRemoveRoot?: () => void;
 }) {
   return (
     <div
       onClick={onClick}
+      onContextMenu={onContextMenu}
       title={title}
       className={cn(
         "group flex items-center gap-1 pr-2 py-0.5 cursor-pointer select-none text-fg-muted hover:bg-bg-hover hover:text-fg",
@@ -376,24 +552,30 @@ function FolderRow({
 }
 
 function FileNodeRow({
-  path,
-  name,
+  entry,
   depth,
+  siblings,
+  onRefreshDir,
+  onContextMenu,
 }: {
-  path: string;
-  name: string;
+  entry: DirEntryInfo;
   depth: number;
+  siblings: string[];
+  onRefreshDir: () => void;
+  onContextMenu: (m: MenuState) => void;
 }) {
-  const addTab = useAppStore((s) => s.addTab);
-  const setActive = useAppStore((s) => s.setActive);
+  const sel = useSelection();
   const tabs = useAppStore((s) => s.tabs);
+  const setActive = useAppStore((s) => s.setActive);
+  const addTab = useAppStore((s) => s.addTab);
   const pushFile = useRecentStore((s) => s.pushFile);
   const [busy, setBusy] = useState(false);
 
   const alreadyOpenId = useMemo(
-    () => tabs.find((t) => t.path === path)?.id,
-    [tabs, path]
+    () => tabs.find((t) => t.path === entry.path)?.id,
+    [tabs, entry.path]
   );
+  const isSelected = sel.isSelected(entry.path);
 
   const open = useCallback(async () => {
     if (alreadyOpenId) {
@@ -402,7 +584,7 @@ function FileNodeRow({
     }
     setBusy(true);
     try {
-      const info = await openFile(path);
+      const info = await openFile(entry.path);
       addTab(info);
       pushFile({ path: info.path, name: info.name });
     } catch (e) {
@@ -410,22 +592,55 @@ function FileNodeRow({
     } finally {
       setBusy(false);
     }
-  }, [alreadyOpenId, setActive, path, addTab, pushFile]);
+  }, [alreadyOpenId, setActive, entry.path, entry.name, addTab, pushFile]);
+
+  function handleClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    sel.click(entry.path, siblings, {
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      shiftKey: e.shiftKey,
+    });
+  }
+
+  function handleContext(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    // If right-clicking a row that isn't currently in the selection, replace
+    // selection with just that row (matches OS file-manager UX).
+    let paths = Array.from(sel.selected);
+    if (!isSelected) {
+      sel.selectOnly(entry.path);
+      paths = [entry.path];
+    }
+    onContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      paths,
+      primary: entry.path,
+      isFolder: false,
+      isRoot: false,
+      onRefresh: onRefreshDir,
+    });
+  }
 
   return (
     <div
+      onClick={handleClick}
       onDoubleClick={open}
-      onClick={open}
-      title={path}
+      onContextMenu={handleContext}
+      title={`${entry.path}\n${formatRelativeTime(entry.modified)}`}
       className={cn(
-        "flex items-center gap-1 pr-2 py-0.5 cursor-pointer select-none",
-        alreadyOpenId
+        "group flex items-center gap-1 pr-2 py-0.5 cursor-pointer select-none",
+        isSelected
+          ? "bg-brand/25 text-fg"
+          : alreadyOpenId
           ? "text-fg bg-brand/10"
           : "text-fg-muted hover:bg-bg-hover hover:text-fg"
       )}
       style={{ paddingLeft: indent(depth) }}
     >
-      {/* invisible chevron slot keeps file-name alignment flush with siblings */}
+      {/* Invisible chevron slot keeps file names aligned with sibling folders */}
       <span className="w-3 h-3 shrink-0" />
       <FileText
         className={cn(
@@ -433,12 +648,268 @@ function FileNodeRow({
           alreadyOpenId ? "text-brand" : "text-fg-subtle"
         )}
       />
-      <span className="flex-1 truncate text-xs">{name}</span>
-      {busy && (
+      <span className="flex-1 truncate text-xs">{entry.name}</span>
+      {busy ? (
         <RefreshCw className="w-3 h-3 shrink-0 animate-spin text-fg-subtle" />
+      ) : (
+        <span className="text-[10px] text-fg-subtle tabular-nums shrink-0">
+          {formatRelativeTime(entry.modified)}
+        </span>
       )}
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Context menu                                                       */
+/* ------------------------------------------------------------------ */
+
+function FileContextMenu({
+  target,
+  onClose,
+  selectionPaths,
+}: {
+  target: MenuState | null;
+  onClose: () => void;
+  /** Authoritative current selection — used because target may be stale */
+  selectionPaths: string[];
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const addTab = useAppStore((s) => s.addTab);
+  const setActive = useAppStore((s) => s.setActive);
+  const tabs = useAppStore((s) => s.tabs);
+  const pushFile = useRecentStore((s) => s.pushFile);
+  const removeFolder = useRecentStore((s) => s.removeFolder);
+
+  useEffect(() => {
+    if (!target) return;
+    function onDoc(e: MouseEvent) {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [target, onClose]);
+
+  if (!target) return null;
+
+  // Use the latest selection if we right-clicked on a file row.
+  const paths = target.isFolder
+    ? []
+    : selectionPaths.length > 0
+    ? selectionPaths
+    : [target.primary];
+  const single = paths.length === 1 ? paths[0] : null;
+  const multi = paths.length > 1;
+
+  async function openOne(p: string) {
+    const existing = tabs.find((t) => t.path === p);
+    if (existing) {
+      setActive(existing.id);
+      return;
+    }
+    try {
+      const info = await openFile(p);
+      addTab(info);
+      pushFile({ path: info.path, name: info.name });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function handleOpenAll() {
+    onClose();
+    // Sequential to keep the order in tabs predictable.
+    for (const p of paths) {
+      // eslint-disable-next-line no-await-in-loop
+      await openOne(p);
+    }
+  }
+
+  function copyPaths() {
+    onClose();
+    const text = paths.length > 0 ? paths.join("\n") : target?.primary ?? "";
+    if (text) navigator.clipboard.writeText(text).catch(() => {});
+  }
+
+  function reveal() {
+    onClose();
+    if (target?.onReveal && target.primary) {
+      // Find directory: if primary is a folder, reveal itself; if file,
+      // reveal its parent.
+      const p = target.isFolder
+        ? target.primary
+        : target.primary.replace(/[\\/][^\\/]*$/, "");
+      target.onReveal(p);
+    }
+  }
+
+  // Clamp inside viewport
+  const W = 240;
+  const itemCount = (target.isFolder ? 5 : multi ? 4 : 5) + 1;
+  const H = itemCount * 30 + 16;
+  const left = Math.min(target.x, window.innerWidth - W - 8);
+  const top = Math.min(target.y, window.innerHeight - H - 8);
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-[70] min-w-[240px] py-1 bg-bg-panel border border-border rounded-md shadow-2xl"
+      style={{ left, top }}
+      role="menu"
+    >
+      {/* Folder-row menu */}
+      {target.isFolder && (
+        <>
+          <MenuItem
+            icon={<RefreshCw className="w-4 h-4" />}
+            onClick={() => {
+              onClose();
+              target.onRefresh?.();
+            }}
+          >
+            Refresh
+          </MenuItem>
+          {target.onReveal && (
+            <MenuItem
+              icon={<ExternalLink className="w-4 h-4" />}
+              onClick={reveal}
+            >
+              Open in folder browser…
+            </MenuItem>
+          )}
+          <MenuItem
+            icon={<Copy className="w-4 h-4" />}
+            onClick={copyPaths}
+          >
+            Copy path
+          </MenuItem>
+          {target.isRoot && target.onRemoveRoot && (
+            <>
+              <Divider />
+              <MenuItem
+                icon={<Trash2 className="w-4 h-4 text-danger" />}
+                danger
+                onClick={() => {
+                  onClose();
+                  target.onRemoveRoot?.();
+                }}
+              >
+                Remove from workspace
+              </MenuItem>
+            </>
+          )}
+        </>
+      )}
+
+      {/* File-row menu */}
+      {!target.isFolder && (
+        <>
+          {multi ? (
+            <MenuItem
+              icon={<FolderOpen className="w-4 h-4" />}
+              shortcut={`× ${paths.length}`}
+              onClick={handleOpenAll}
+            >
+              Open all
+            </MenuItem>
+          ) : (
+            <MenuItem
+              icon={<FolderOpen className="w-4 h-4" />}
+              shortcut="Dbl-click"
+              onClick={() => {
+                onClose();
+                if (single) openOne(single);
+              }}
+            >
+              Open
+            </MenuItem>
+          )}
+          {single && target.onReveal && (
+            <MenuItem
+              icon={<ExternalLink className="w-4 h-4" />}
+              onClick={reveal}
+            >
+              Reveal in folder browser…
+            </MenuItem>
+          )}
+          <MenuItem
+            icon={<Copy className="w-4 h-4" />}
+            onClick={copyPaths}
+          >
+            {multi ? `Copy ${paths.length} paths` : "Copy path"}
+          </MenuItem>
+          <MenuItem
+            icon={<Pin className="w-4 h-4" />}
+            onClick={() => {
+              onClose();
+              for (const p of paths) {
+                const name = p.split(/[\\/]/).pop() ?? p;
+                pushFile({ path: p, name });
+              }
+            }}
+          >
+            {multi ? "Add to recent" : "Add to recent"}
+          </MenuItem>
+          <Divider />
+          <MenuItem
+            icon={<RefreshCw className="w-4 h-4" />}
+            onClick={() => {
+              onClose();
+              target.onRefresh?.();
+            }}
+          >
+            Refresh
+          </MenuItem>
+        </>
+      )}
+    </div>
+  );
+
+  function MenuItem({
+    children,
+    icon,
+    shortcut,
+    onClick,
+    danger,
+  }: {
+    children: React.ReactNode;
+    icon: React.ReactNode;
+    shortcut?: string;
+    onClick: () => void;
+    danger?: boolean;
+  }) {
+    void removeFolder;
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "w-full flex items-center gap-2 px-3 py-1.5 text-sm",
+          danger ? "text-danger" : "text-fg",
+          "hover:bg-bg-hover focus:bg-bg-hover focus:outline-none cursor-pointer"
+        )}
+      >
+        <span className={danger ? "text-danger" : "text-fg-muted"}>{icon}</span>
+        <span className="flex-1 text-left truncate">{children}</span>
+        {shortcut && (
+          <kbd className="text-xs text-fg-subtle px-1.5 py-0.5 rounded bg-bg-elevated border border-border">
+            {shortcut}
+          </kbd>
+        )}
+      </button>
+    );
+  }
+
+  function Divider() {
+    return <div className="my-1 h-px bg-border" />;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -485,7 +956,6 @@ function EmptyHint({ text }: { text: string }) {
   );
 }
 
-/** 8px per depth level — compact IDE-like indentation. */
 function indent(depth: number) {
   return `${8 + depth * 12}px`;
 }
