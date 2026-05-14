@@ -152,8 +152,21 @@ export interface DirEntryInfo {
   modified: number;
 }
 
+export interface DeleteResult {
+  path: string;
+  ok: boolean;
+  error: string | null;
+}
+
 export async function listDir(path: string): Promise<DirEntryInfo[]> {
   return invoke<DirEntryInfo[]>("list_dir", { path });
+}
+
+export async function deletePaths(
+  paths: string[],
+  recursive = false
+): Promise<DeleteResult[]> {
+  return invoke<DeleteResult[]>("delete_paths", { paths, recursive });
 }
 
 export async function fileExists(path: string): Promise<boolean> {

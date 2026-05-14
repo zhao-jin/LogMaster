@@ -5,7 +5,7 @@ mod search;
 mod tail;
 
 use crate::filter::FilterRule;
-use crate::fs::DirEntryInfo;
+use crate::fs::{DeleteResult, DirEntryInfo};
 use crate::log_file::LogFile;
 use crate::search::SearchHit;
 use crate::tail::TailHandle;
@@ -219,6 +219,22 @@ async fn list_dir(path: String) -> Result<Vec<DirEntryInfo>, String> {
     fs::list_dir(std::path::Path::new(&path)).map_err(|e| format!("{e}"))
 }
 
+/// Permanently delete a list of paths from disk. Returns per-path results
+/// so the UI can summarise partial failures (e.g. one file is locked).
+/// Directories are deleted recursively only when `recursive=true`.
+#[tauri::command(rename_all = "camelCase")]
+async fn delete_paths(
+    paths: Vec<String>,
+    recursive: bool,
+) -> Result<Vec<DeleteResult>, String> {
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        fs::delete_paths(&paths, recursive)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?;
+    Ok(res)
+}
+
 /// Lightweight existence + metadata check used by the frontend's polling
 /// loop. Returns `false` when the file no longer exists or can't be
 /// stat-ed (e.g. permission denied / parent removed).
@@ -263,6 +279,7 @@ pub fn run() {
             start_tail,
             stop_tail,
             list_dir,
+            delete_paths,
             file_exists,
             reload_file,
         ])

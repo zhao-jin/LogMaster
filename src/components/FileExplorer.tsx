@@ -21,11 +21,13 @@ import {
   ExternalLink,
   Pin,
 } from "lucide-react";
-import { listDir, openFile, type DirEntryInfo } from "../lib/ipc";
+import { listDir, openFile, deletePaths, type DirEntryInfo } from "../lib/ipc";
 import { openDialog, openFolderDialog } from "../lib/dialog";
 import { useAppStore } from "../store/app";
 import { useRecentStore } from "../store/recent";
 import { cn, formatRelativeTime } from "../lib/utils";
+import { closeFile, stopTail } from "../lib/ipc";
+import { clearFileCache } from "./LogView";
 
 /* ------------------------------------------------------------------ */
 /*  Multi-select context                                              */
@@ -83,6 +85,20 @@ interface MenuState {
   onRemoveRoot?: () => void;
   /** Reveal in folder browser modal (full path). */
   onReveal?: (path: string) => void;
+}
+
+/**
+ * Pending delete request — the explorer surface lifts the confirmation
+ * dialog up so that closing the context menu (which is what
+ * `onRequestDelete` does first) doesn't unmount the dialog.
+ */
+interface ConfirmState {
+  paths: string[];
+  recursive: boolean;
+  /** Human-readable summary line in the dialog body. */
+  summary: string;
+  /** Called after the delete completes (refresh listings). */
+  afterRefresh?: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -147,6 +163,62 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
   );
 
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+
+  async function handleDelete(c: ConfirmState) {
+    setConfirm(null);
+    const results = await deletePaths(c.paths, c.recursive).catch((e) => {
+      console.error("delete failed", e);
+      return [] as { path: string; ok: boolean; error: string | null }[];
+    });
+    const deleted = new Set(results.filter((r) => r.ok).map((r) => r.path));
+    const failed = results.filter((r) => !r.ok);
+
+    // Close any open tabs whose file was deleted (best-effort: also try
+    // to close tabs for files inside a deleted directory).
+    const { tabs } = useAppStore.getState();
+    for (const t of tabs) {
+      const matches =
+        deleted.has(t.path) ||
+        c.paths.some(
+          (p) =>
+            deleted.has(p) &&
+            t.path.toLowerCase().startsWith(p.toLowerCase() + "\\")
+        );
+      if (!matches) continue;
+      try {
+        if (t.tailing) await stopTail(t.id);
+        await closeFile(t.id);
+      } catch {
+        /* ignore */
+      }
+      clearFileCache(t.id);
+      useAppStore.getState().removeTab(t.id);
+    }
+
+    // Refresh the parent directory listing so the row disappears.
+    c.afterRefresh?.();
+
+    // Drop deleted paths from the selection.
+    if (deleted.size > 0) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const p of deleted) next.delete(p);
+        return next;
+      });
+    }
+
+    if (failed.length > 0) {
+      // Surface failures via a simple alert — rare path, used so the user
+      // doesn't silently think the file was deleted when it wasn't (e.g.
+      // permission denied, read-only, in use by another process despite
+      // our shared open).
+      const msg = failed
+        .map((f) => `• ${f.path}\n   ${f.error}`)
+        .join("\n");
+      alert(`Could not delete ${failed.length} item(s):\n\n${msg}`);
+    }
+  }
 
   // Refresh epoch — bumps every 5s while the explorer is mounted. Each
   // expanded folder reacts by re-listing its directory. 5s is a sweet
@@ -192,6 +264,16 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
             target={menu}
             onClose={() => setMenu(null)}
             selectionPaths={Array.from(selected)}
+            onRequestDelete={(c) => {
+              setMenu(null);
+              setConfirm(c);
+            }}
+          />
+
+          <ConfirmDialog
+            state={confirm}
+            onCancel={() => setConfirm(null)}
+            onConfirm={handleDelete}
           />
         </aside>
       </RefreshEpochContext.Provider>
@@ -712,11 +794,13 @@ function FileContextMenu({
   target,
   onClose,
   selectionPaths,
+  onRequestDelete,
 }: {
   target: MenuState | null;
   onClose: () => void;
   /** Authoritative current selection — used because target may be stale */
   selectionPaths: string[];
+  onRequestDelete: (c: ConfirmState) => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const addTab = useAppStore((s) => s.addTab);
@@ -796,7 +880,7 @@ function FileContextMenu({
 
   // Clamp inside viewport
   const W = 240;
-  const itemCount = (target.isFolder ? 5 : multi ? 4 : 5) + 1;
+  const itemCount = (target.isFolder ? 6 : multi ? 6 : 7) + 1;
   const H = itemCount * 30 + 16;
   const left = Math.min(target.x, window.innerWidth - W - 8);
   const top = Math.min(target.y, window.innerHeight - H - 8);
@@ -846,6 +930,27 @@ function FileContextMenu({
                 }}
               >
                 Remove from workspace
+              </MenuItem>
+            </>
+          )}
+          {!target.isRoot && (
+            <>
+              <Divider />
+              <MenuItem
+                icon={<Trash2 className="w-4 h-4 text-danger" />}
+                danger
+                onClick={() => {
+                  const folderName =
+                    target.primary.split(/[\\/]/).pop() ?? target.primary;
+                  onRequestDelete({
+                    paths: [target.primary],
+                    recursive: true,
+                    summary: `Delete folder "${folderName}" and ALL its contents?`,
+                    afterRefresh: target.onRefresh,
+                  });
+                }}
+              >
+                Delete folder…
               </MenuItem>
             </>
           )}
@@ -910,6 +1015,25 @@ function FileContextMenu({
             }}
           >
             Refresh
+          </MenuItem>
+          <MenuItem
+            icon={<Trash2 className="w-4 h-4 text-danger" />}
+            shortcut="Del"
+            danger
+            onClick={() => {
+              const summary =
+                paths.length === 1
+                  ? `Delete "${paths[0].split(/[\\/]/).pop()}"?`
+                  : `Delete ${paths.length} files?`;
+              onRequestDelete({
+                paths,
+                recursive: false,
+                summary,
+                afterRefresh: target.onRefresh,
+              });
+            }}
+          >
+            {multi ? `Delete ${paths.length} files…` : "Delete…"}
           </MenuItem>
         </>
       )}
@@ -1002,4 +1126,92 @@ function EmptyHint({ text }: { text: string }) {
 
 function indent(depth: number) {
   return `${8 + depth * 12}px`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Delete confirmation dialog                                         */
+/* ------------------------------------------------------------------ */
+
+function ConfirmDialog({
+  state,
+  onCancel,
+  onConfirm,
+}: {
+  state: ConfirmState | null;
+  onCancel: () => void;
+  onConfirm: (c: ConfirmState) => void;
+}) {
+  // Escape closes; Enter confirms.
+  useEffect(() => {
+    if (!state) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+      if (e.key === "Enter") onConfirm(state!);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state, onCancel, onConfirm]);
+
+  if (!state) return null;
+
+  // Cap the preview list so dialogs stay manageable for huge selections.
+  const previewLimit = 8;
+  const previewPaths = state.paths.slice(0, previewLimit);
+  const overflow = state.paths.length - previewPaths.length;
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] bg-black/50 flex items-center justify-center"
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[480px] max-w-[92vw] bg-bg-panel border border-border rounded-lg shadow-2xl overflow-hidden"
+        role="alertdialog"
+      >
+        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <Trash2 className="w-4 h-4 text-danger" />
+          <span className="text-sm font-semibold text-fg">Confirm delete</span>
+        </div>
+        <div className="px-4 py-3 text-sm text-fg">
+          <div>{state.summary}</div>
+          <div className="mt-2 text-xs text-fg-subtle">
+            This action is permanent and cannot be undone.
+          </div>
+          {state.paths.length > 0 && (
+            <ul className="mt-3 max-h-[180px] overflow-auto text-xs font-mono text-fg-muted bg-bg/40 border border-border rounded p-2 space-y-0.5">
+              {previewPaths.map((p) => (
+                <li key={p} className="truncate" title={p}>
+                  {p}
+                </li>
+              ))}
+              {overflow > 0 && (
+                <li className="text-fg-subtle italic">
+                  …and {overflow} more
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-4 py-2 border-t border-border bg-bg/40">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm rounded text-fg-muted hover:text-fg hover:bg-bg-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            autoFocus
+            onClick={() => onConfirm(state)}
+            className="px-3 py-1.5 text-sm rounded bg-danger/15 text-danger hover:bg-danger hover:text-white border border-danger/40 transition-colors flex items-center gap-1.5"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
