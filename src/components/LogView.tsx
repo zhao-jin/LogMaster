@@ -104,14 +104,51 @@ export function LogView({
 
   const totalRows = visibleLines ? visibleLines.length : lineCount;
 
+  // Cache invalidation key — deliberately does NOT include `lineCount` in
+  // the unfiltered case, because tail-mode appends only ADD lines past
+  // the current end. Existing chunks (lines that were already there) are
+  // still valid; clearing the cache on every tail tick caused a visible
+  // "flash" — every visible row would briefly fall back to a ghost
+  // placeholder until the chunk was re-fetched.
+  //
+  // For the filtered view we DO want a re-fetch when the projection
+  // length changes, because viewIdx → physIdx mapping may have shifted.
+  // In practice useFilter rebuilds visibleLines (a new Uint32Array) on
+  // any rule / data change, so the identity of `visibleLines` is enough
+  // to capture that.
   const cacheKey = useMemo(
-    () =>
-      `${fileId}::${visibleLines ? visibleLines.length : "all"}::${lineCount}`,
-    [fileId, visibleLines, lineCount]
+    () => `${fileId}::${visibleLines ? "filtered" : "all"}`,
+    [fileId, visibleLines]
   );
   useEffect(() => {
     getCache(fileId).clear();
   }, [cacheKey, fileId]);
+
+  // Detect file truncation / rotation: lineCount went DOWN since last
+  // render. In that case existing chunks describe lines that no longer
+  // exist (or were replaced), so we must drop the cache. Pure appends
+  // (lineCount only grows) leave the cache intact — that's the whole
+  // point of decoupling cacheKey from lineCount above.
+  //
+  // For appends we also evict the chunk that contains the previous
+  // tail of the file: the last line in that chunk may have been a
+  // partial line that's now been completed by new bytes, so its
+  // cached text is stale. Evicting just one chunk avoids the global
+  // flash while still showing accurate content at the boundary.
+  const lastLineCountRef = useRef(lineCount);
+  useEffect(() => {
+    const prev = lastLineCountRef.current;
+    if (lineCount < prev) {
+      getCache(fileId).clear();
+    } else if (lineCount > prev && !visibleLines) {
+      const cache = getCache(fileId);
+      // Evict the chunk that USED to contain the last line.
+      const lastIdx = Math.max(0, prev - 1);
+      const chunkIdx = Math.floor(lastIdx / CHUNK);
+      cache.delete(chunkIdx);
+    }
+    lastLineCountRef.current = lineCount;
+  }, [lineCount, fileId, visibleLines]);
 
   const virtualizer = useVirtualizer({
     count: totalRows,
