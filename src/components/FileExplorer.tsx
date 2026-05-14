@@ -58,6 +58,14 @@ function useSelection() {
   return ctx;
 }
 
+/**
+ * Counter that ticks every few seconds. Expanded folder nodes subscribe
+ * to it and re-listDir on each tick so users see new / deleted files
+ * appear/disappear without manual refresh. Collapsed nodes don't read
+ * this value, so they cost nothing.
+ */
+const RefreshEpochContext = createContext<number>(0);
+
 interface MenuState {
   x: number;
   y: number;
@@ -140,39 +148,53 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
 
   const [menu, setMenu] = useState<MenuState | null>(null);
 
+  // Refresh epoch — bumps every 5s while the explorer is mounted. Each
+  // expanded folder reacts by re-listing its directory. 5s is a sweet
+  // spot: fast enough that mtime sort feels live, slow enough that a
+  // workspace with dozens of expanded folders doesn't hammer the FS.
+  const [refreshEpoch, setRefreshEpoch] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setRefreshEpoch((n) => n + 1),
+      5000
+    );
+    return () => window.clearInterval(id);
+  }, []);
+
   return (
     <SelectionContext.Provider value={ctx}>
-      <aside
-        className="h-full flex flex-col bg-bg-panel text-sm"
-        onClick={(e) => {
-          // Click on empty area clears selection
-          if (e.target === e.currentTarget) clear();
-        }}
-      >
-        <header className="flex items-center gap-1 px-2 h-9 border-b border-border shrink-0">
-          <FolderOpen className="w-4 h-4 text-brand" />
-          <span className="text-sm font-semibold text-fg">Explorer</span>
-          {selected.size > 1 && (
-            <span className="ml-auto text-[10px] text-brand tabular-nums">
-              {selected.size} selected
-            </span>
-          )}
-        </header>
+      <RefreshEpochContext.Provider value={refreshEpoch}>
+        <aside
+          className="h-full flex flex-col bg-bg-panel text-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) clear();
+          }}
+        >
+          <header className="flex items-center gap-1 px-2 h-9 border-b border-border shrink-0">
+            <FolderOpen className="w-4 h-4 text-brand" />
+            <span className="text-sm font-semibold text-fg">Explorer</span>
+            {selected.size > 1 && (
+              <span className="ml-auto text-[10px] text-brand tabular-nums">
+                {selected.size} selected
+              </span>
+            )}
+          </header>
 
-        <div className="flex-1 overflow-auto">
-          <OpenFilesSection />
-          <FoldersSection
-            onContextMenu={setMenu}
-            onOpenInBrowser={onOpenFolderBrowser}
+          <div className="flex-1 overflow-auto">
+            <OpenFilesSection />
+            <FoldersSection
+              onContextMenu={setMenu}
+              onOpenInBrowser={onOpenFolderBrowser}
+            />
+          </div>
+
+          <FileContextMenu
+            target={menu}
+            onClose={() => setMenu(null)}
+            selectionPaths={Array.from(selected)}
           />
-        </div>
-
-        <FileContextMenu
-          target={menu}
-          onClose={() => setMenu(null)}
-          selectionPaths={Array.from(selected)}
-        />
-      </aside>
+        </aside>
+      </RefreshEpochContext.Provider>
     </SelectionContext.Provider>
   );
 }
@@ -362,27 +384,49 @@ function FolderTreeNode({
   const [entries, setEntries] = useState<DirEntryInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshEpoch = useContext(RefreshEpochContext);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const es = await listDir(path);
-      // Backend already sorts: folders first, then files by modified desc.
-      // Trust it — DON'T re-sort alphabetically here.
-      setEntries(es);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [path]);
+  // Track if a refresh is already in flight to coalesce overlapping ticks.
+  const inflight = useRef(false);
 
+  const load = useCallback(
+    async (silent = false) => {
+      if (inflight.current) return;
+      inflight.current = true;
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
+      try {
+        const es = await listDir(path);
+        // Backend already sorts: folders first, then files by modified desc.
+        setEntries(es);
+        if (!silent) setError(null);
+      } catch (e) {
+        // Background refresh shouldn't replace good entries with an error.
+        if (!silent) setError(String(e));
+      } finally {
+        inflight.current = false;
+        if (!silent) setLoading(false);
+      }
+    },
+    [path]
+  );
+
+  // Initial load on first expand.
   useEffect(() => {
     if (expanded && entries === null && !loading) {
-      load();
+      load(false);
     }
   }, [expanded, entries, loading, load]);
+
+  // Periodic background refresh — only when this node is expanded so that
+  // collapsed roots cost nothing. Silent reload preserves error/loading
+  // state to avoid UI flicker.
+  useEffect(() => {
+    if (!expanded || entries === null) return;
+    load(true);
+  }, [refreshEpoch, expanded, entries, load]);
 
   // Children files in display order — used as siblings for shift-range.
   const fileSiblings = useMemo(
@@ -400,7 +444,7 @@ function FolderTreeNode({
       primary: path,
       isFolder: true,
       isRoot,
-      onRefresh: load,
+      onRefresh: () => load(false),
       onRemoveRoot: isRoot ? onRemoveRoot : undefined,
       onReveal: onOpenInBrowser,
     });
@@ -416,7 +460,7 @@ function FolderTreeNode({
         loading={loading}
         onClick={() => setExpanded((v) => !v)}
         onContextMenu={handleContext}
-        onRefresh={load}
+        onRefresh={() => load(false)}
         onRemoveRoot={onRemoveRoot}
         title={path}
       />
@@ -463,7 +507,7 @@ function FolderTreeNode({
                 entry={e}
                 depth={depth + 1}
                 siblings={fileSiblings}
-                onRefreshDir={load}
+                onRefreshDir={() => load(false)}
                 onContextMenu={onContextMenu}
               />
             )

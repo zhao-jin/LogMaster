@@ -20,6 +20,7 @@ import { openDialog } from "./lib/dialog";
 import { useFilter } from "./hooks/useFilter";
 import { useSearch } from "./hooks/useSearch";
 import { useFileDrop } from "./hooks/useFileDrop";
+import { useFileWatchdog } from "./hooks/useFileWatchdog";
 import { closeFile, stopTail } from "./lib/ipc";
 import { clearFileCache } from "./components/LogView";
 import { useCallback, useEffect, useState } from "react";
@@ -54,6 +55,7 @@ export default function App() {
   useFilter();
   const search = useSearch();
   const dropHover = useFileDrop();
+  useFileWatchdog();
 
   // Listen for tail events
   useEffect(() => {

@@ -219,6 +219,33 @@ async fn list_dir(path: String) -> Result<Vec<DirEntryInfo>, String> {
     fs::list_dir(std::path::Path::new(&path)).map_err(|e| format!("{e}"))
 }
 
+/// Lightweight existence + metadata check used by the frontend's polling
+/// loop. Returns `false` when the file no longer exists or can't be
+/// stat-ed (e.g. permission denied / parent removed).
+#[tauri::command]
+async fn file_exists(path: String) -> Result<bool, String> {
+    Ok(std::fs::metadata(&path).is_ok())
+}
+
+/// Reload an opened file in place: re-detect encoding, rebuild offsets,
+/// remap. Returns the new line count. The `id` stays the same so the
+/// frontend can keep its tab and just clear its chunk cache.
+#[tauri::command]
+async fn reload_file(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<usize, String> {
+    let file = state
+        .files
+        .get(&id)
+        .ok_or_else(|| "file not open".to_string())?
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || file.reload())
+        .await
+        .map_err(|e| format!("join error: {e}"))?
+        .map_err(|e| format!("{e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -236,6 +263,8 @@ pub fn run() {
             start_tail,
             stop_tail,
             list_dir,
+            file_exists,
+            reload_file,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

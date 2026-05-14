@@ -6,6 +6,38 @@ use parking_lot::RwLock;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+/// Open a file with maximum sharing flags so it doesn't block external
+/// processes from writing/renaming/deleting it while we have it mapped.
+///
+/// On Windows the default `File::open` requests `GENERIC_READ` with only
+/// `FILE_SHARE_READ`, which means another process cannot rename or delete
+/// the file while LogMaster has it open. We override that with
+/// `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` (= 0x7).
+///
+/// Once we've successfully `mmap`-ed the file, the kernel keeps the
+/// underlying data alive even if the original directory entry is deleted
+/// or rotated, so reads/searches keep working until the user closes the
+/// tab. The frontend polls existence and reloads / closes when the file
+/// goes away.
+fn open_shared(path: &Path) -> Result<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        const FILE_SHARE_DELETE: u32 = 0x4;
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(path)?;
+        Ok(f)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(File::open(path)?)
+    }
+}
+
 /// An opened log file: owns its mmap and a sorted Vec of line offsets.
 ///
 /// `line_offsets[i]` = byte offset of the start of line i.
@@ -23,7 +55,7 @@ pub struct LogFile {
 
 impl LogFile {
     pub fn open(path: &Path) -> Result<Self> {
-        let file = File::open(path)?;
+        let file = open_shared(path)?;
         let mmap = unsafe { Mmap::map(&file) }?;
         let encoding = detect_encoding(&mmap);
         let offsets = build_line_offsets(&mmap);
@@ -176,7 +208,7 @@ impl LogFile {
     /// Re-map the file and append new line offsets. Used by tail watcher
     /// when file size grows.
     pub fn refresh_append(&self) -> Result<usize> {
-        let file = File::open(&self.path)?;
+        let file = open_shared(&self.path)?;
         let new_len = file.metadata()?.len();
         let old_len = self.size();
 
@@ -226,6 +258,20 @@ impl LogFile {
     pub fn with_mmap<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         let mmap = self.mmap.read();
         f(&mmap)
+    }
+
+    /// Force a full reload of the file from disk: re-detect encoding,
+    /// rebuild the offset table, swap in the new mmap. Used by the
+    /// per-tab "reload" button so users can pick up out-of-band changes
+    /// (rotation, truncation, full rewrite) without closing+reopening.
+    pub fn reload(&self) -> Result<usize> {
+        let file = open_shared(&self.path)?;
+        let mmap = unsafe { Mmap::map(&file) }?;
+        let offsets = build_line_offsets(&mmap);
+        *self.mmap.write() = mmap;
+        *self.offsets.write() = offsets;
+        let ofs = self.offsets.read();
+        Ok(if ofs.len() <= 1 { 0 } else { ofs.len() - 1 })
     }
 
     /// Cheap clone of the line-offset table. Useful for parallel scans where

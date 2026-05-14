@@ -156,6 +156,14 @@ export async function listDir(path: string): Promise<DirEntryInfo[]> {
   return invoke<DirEntryInfo[]>("list_dir", { path });
 }
 
+export async function fileExists(path: string): Promise<boolean> {
+  return invoke<boolean>("file_exists", { path });
+}
+
+export async function reloadFile(id: string): Promise<number> {
+  return invoke<number>("reload_file", { id });
+}
+
 export interface TailEvent {
   id: string;
   new_line_count: number; // current total
