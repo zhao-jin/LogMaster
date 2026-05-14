@@ -104,51 +104,104 @@ export function LogView({
 
   const totalRows = visibleLines ? visibleLines.length : lineCount;
 
-  // Cache invalidation key — deliberately does NOT include `lineCount` in
-  // the unfiltered case, because tail-mode appends only ADD lines past
-  // the current end. Existing chunks (lines that were already there) are
-  // still valid; clearing the cache on every tail tick caused a visible
-  // "flash" — every visible row would briefly fall back to a ghost
-  // placeholder until the chunk was re-fetched.
+  // Cache invalidation strategy
+  // ---------------------------
+  // The chunk cache is keyed by chunkIdx in the *view* (post-filter)
+  // index space. Two things can shift that mapping and force eviction:
   //
-  // For the filtered view we DO want a re-fetch when the projection
-  // length changes, because viewIdx → physIdx mapping may have shifted.
-  // In practice useFilter rebuilds visibleLines (a new Uint32Array) on
-  // any rule / data change, so the identity of `visibleLines` is enough
-  // to capture that.
-  const cacheKey = useMemo(
-    () => `${fileId}::${visibleLines ? "filtered" : "all"}`,
-    [fileId, visibleLines]
+  //   1. The file changed (different fileId).
+  //   2. Filter is toggled, OR the active filter rules produce a
+  //      *different prefix* of visible lines (i.e. some entries near
+  //      the start changed). This is rare in practice — useFilter
+  //      re-runs on every tail tick and produces a Uint32Array that
+  //      is monotonically extending: existing entries stay put, only
+  //      the tail of the array gains new physical indices.
+  //
+  // So the only thing that *must* invalidate is "filter on/off" and
+  // "filter rules changed". Identity of the visibleLines array on its
+  // own does NOT mean the prefix changed — that's the bug we hit
+  // before (entire cache wiped on every tail event during filter mode,
+  // making the viewport flash to ghost rows).
+  //
+  // We sample a few sentinels (length, first, last) plus a "rules
+  // signature" derived from the active filter rules. If any sentinel
+  // shifts BACKWARD (length shrinks, or any prefix entry changes) we
+  // assume the projection's history was rewritten and clear. Pure
+  // tail growth keeps prefix sentinels stable -> cache survives.
+  const filterSig = useAppStore((s) =>
+    s.rules
+      .filter(
+        (r) => r.enabled && r.pattern.length > 0 && r.filter !== "none"
+      )
+      .map(
+        (r) =>
+          `${r.filter}|${r.is_regex ? "re" : "lit"}|${
+            r.case_sensitive ? "cs" : "ci"
+          }|${r.pattern}`
+      )
+      .join("\n")
   );
-  useEffect(() => {
-    getCache(fileId).clear();
-  }, [cacheKey, fileId]);
 
-  // Detect file truncation / rotation: lineCount went DOWN since last
-  // render. In that case existing chunks describe lines that no longer
-  // exist (or were replaced), so we must drop the cache. Pure appends
-  // (lineCount only grows) leave the cache intact — that's the whole
-  // point of decoupling cacheKey from lineCount above.
-  //
-  // For appends we also evict the chunk that contains the previous
-  // tail of the file: the last line in that chunk may have been a
-  // partial line that's now been completed by new bytes, so its
-  // cached text is stale. Evicting just one chunk avoids the global
-  // flash while still showing accurate content at the boundary.
-  const lastLineCountRef = useRef(lineCount);
+  const lastSnapshotRef = useRef<{
+    fileId: string;
+    filterSig: string;
+    hasFilter: boolean;
+    len: number;
+    first: number;
+    mid: number;
+  } | null>(null);
   useEffect(() => {
-    const prev = lastLineCountRef.current;
-    if (lineCount < prev) {
-      getCache(fileId).clear();
-    } else if (lineCount > prev && !visibleLines) {
-      const cache = getCache(fileId);
-      // Evict the chunk that USED to contain the last line.
-      const lastIdx = Math.max(0, prev - 1);
-      const chunkIdx = Math.floor(lastIdx / CHUNK);
-      cache.delete(chunkIdx);
+    const cache = getCache(fileId);
+    const hasFilter = !!visibleLines;
+    const len = visibleLines ? visibleLines.length : lineCount;
+    const first = visibleLines ? visibleLines[0] ?? 0 : 0;
+    // Probe the middle of the projection too — catches cases where the
+    // filter rule changed but length happens to be similar.
+    const midIdx = Math.floor(len / 2);
+    const mid = visibleLines ? visibleLines[midIdx] ?? 0 : midIdx;
+
+    const prev = lastSnapshotRef.current;
+    const fileChanged = !prev || prev.fileId !== fileId;
+    const filterModeChanged =
+      !prev || prev.hasFilter !== hasFilter || prev.filterSig !== filterSig;
+    const prefixChanged =
+      !!prev &&
+      !fileChanged &&
+      !filterModeChanged &&
+      // Length went BACKWARDS — file truncated or filter dropped rows.
+      (len < prev.len ||
+        // Same/longer length, but a known prefix sentinel moved — projection
+        // rewrote history.
+        (prev.len > 0 && first !== prev.first) ||
+        (prev.len > 0 && midIdx === Math.floor(prev.len / 2) && mid !== prev.mid));
+
+    if (fileChanged || filterModeChanged || prefixChanged) {
+      cache.clear();
+    } else if (prev && len > prev.len) {
+      // Pure append (no projection rewrite). Two chunks may now be stale:
+      //
+      //   1. The last "complete" chunk previously held only `prev.len -
+      //      prev.lastChunkStart` rows; new appended rows extend it
+      //      with more lines past its current array length.  The cached
+      //      string[] is short, so accessing inner indices past its end
+      //      yields undefined → ghost row.
+      //
+      //   2. In unfiltered mode only: the very last row of the previous
+      //      tail might have been a partial line that's now been
+      //      completed by new bytes, so its cached text is stale.
+      const lastIdx = Math.max(0, prev.len - 1);
+      const lastChunk = Math.floor(lastIdx / CHUNK);
+      cache.delete(lastChunk);
     }
-    lastLineCountRef.current = lineCount;
-  }, [lineCount, fileId, visibleLines]);
+
+    lastSnapshotRef.current = { fileId, filterSig, hasFilter, len, first, mid };
+
+    // After eviction the boundary chunk is missing; kick off a refetch
+    // on the next frame so it doesn't stay as a ghost row. We always do
+    // this on append, since prefetch is cheap (cache.has guard skips
+    // already-present chunks).
+    requestAnimationFrame(() => prefetchVisible.current());
+  }, [fileId, lineCount, visibleLines, filterSig]);
 
   const virtualizer = useVirtualizer({
     count: totalRows,
