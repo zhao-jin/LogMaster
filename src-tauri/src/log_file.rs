@@ -1,24 +1,31 @@
 use anyhow::{anyhow, Result};
 use encoding_rs::{Encoding, UTF_8};
 use memchr::memchr_iter;
-use memmap2::Mmap;
 use parking_lot::RwLock;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Open a file with maximum sharing flags so it doesn't block external
-/// processes from writing/renaming/deleting it while we have it mapped.
+/// processes from writing/renaming/deleting it while we have it open.
 ///
 /// On Windows the default `File::open` requests `GENERIC_READ` with only
 /// `FILE_SHARE_READ`, which means another process cannot rename or delete
 /// the file while LogMaster has it open. We override that with
 /// `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` (= 0x7).
 ///
-/// Once we've successfully `mmap`-ed the file, the kernel keeps the
-/// underlying data alive even if the original directory entry is deleted
-/// or rotated, so reads/searches keep working until the user closes the
-/// tab. The frontend polls existence and reloads / closes when the file
-/// goes away.
+/// **Important**: we deliberately do NOT keep this `File` alive for the
+/// lifetime of the `LogFile` (and we do NOT `mmap` it). Holding a long-
+/// lived handle — and especially a memory-mapped section — prevents
+/// other processes from `CreateFile(..., CREATE_ALWAYS, ...)`-overwriting
+/// the log (Windows raises `ERROR_USER_MAPPED_FILE` / 1224 in that case).
+/// UE4 / UE5 starts each run by truncating its log via `CREATE_ALWAYS`,
+/// which would fail if we held a mapping.
+///
+/// Instead we slurp the whole file into an `Arc<Vec<u8>>` and immediately
+/// drop the `File`. The frontend's tail watcher polls for size growth and
+/// re-opens / reloads as needed.
 fn open_shared(path: &Path) -> Result<File> {
     #[cfg(windows)]
     {
@@ -38,31 +45,65 @@ fn open_shared(path: &Path) -> Result<File> {
     }
 }
 
-/// An opened log file: owns its mmap and a sorted Vec of line offsets.
+/// Read the entire file into a buffer using a shared-mode handle, then
+/// drop the handle so we don't hold a SECTION/lock that would block
+/// external truncation. Returns the loaded bytes.
+fn slurp_shared(path: &Path) -> Result<Vec<u8>> {
+    let mut f = open_shared(path)?;
+    let len = f.metadata().map(|m| m.len() as usize).unwrap_or(0);
+    let mut buf: Vec<u8> = Vec::with_capacity(len);
+    f.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+/// Read only the tail region `[from, file_end)`.
+fn slurp_tail(path: &Path, from: u64) -> Result<Vec<u8>> {
+    let mut f = open_shared(path)?;
+    let total = f.metadata()?.len();
+    if from >= total {
+        return Ok(Vec::new());
+    }
+    f.seek(SeekFrom::Start(from))?;
+    let mut buf: Vec<u8> = Vec::with_capacity((total - from) as usize);
+    f.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+/// An opened log file: owns a read-only byte buffer of the file content
+/// and a sorted Vec of line offsets.
+///
+/// Why not `mmap`? See [`open_shared`]. TL;DR — mmap on Windows holds a
+/// file-section reference that blocks `CREATE_ALWAYS` from other
+/// processes (UE4/UE5 fails to start). Buffering the bytes lets external
+/// programs freely rotate / overwrite the file; the frontend's existence
+/// & size polling drives reload.
 ///
 /// `line_offsets[i]` = byte offset of the start of line i.
-/// The sentinel last element equals the file size, so the length of
-/// line i is `line_offsets[i+1] - line_offsets[i]` (trailing \n/\r included,
-/// which we strip on read).
+/// The sentinel last element equals current buffer length, so the length
+/// of line i is `line_offsets[i+1] - line_offsets[i]` (trailing \n/\r
+/// included, which we strip on read).
 pub struct LogFile {
     pub path: PathBuf,
     pub encoding: &'static Encoding,
-    mmap: RwLock<Mmap>,
-    /// First element is 0, last element is current file length.
+    /// Owned byte buffer of the file content. Wrapped in `Arc` so
+    /// readers can cheaply clone the snapshot and drop the lock before
+    /// long scans, but we still hold it via an `RwLock` so tail-append
+    /// can swap in a grown buffer atomically.
+    bytes: RwLock<Arc<Vec<u8>>>,
+    /// First element is 0, last element is current buffer length.
     /// len == line_count + 1.
     offsets: RwLock<Vec<u64>>,
 }
 
 impl LogFile {
     pub fn open(path: &Path) -> Result<Self> {
-        let file = open_shared(path)?;
-        let mmap = unsafe { Mmap::map(&file) }?;
-        let encoding = detect_encoding(&mmap);
-        let offsets = build_line_offsets(&mmap);
+        let buf = slurp_shared(path)?;
+        let encoding = detect_encoding(&buf);
+        let offsets = build_line_offsets(&buf);
         Ok(Self {
             path: path.to_path_buf(),
             encoding,
-            mmap: RwLock::new(mmap),
+            bytes: RwLock::new(Arc::new(buf)),
             offsets: RwLock::new(offsets),
         })
     }
@@ -80,10 +121,17 @@ impl LogFile {
         }
     }
 
+    /// Cheap clone of the current byte snapshot. Holds a reference until
+    /// the returned `Arc` is dropped, but does NOT hold the `RwLock`.
+    fn bytes_snapshot(&self) -> Arc<Vec<u8>> {
+        self.bytes.read().clone()
+    }
+
     /// Return decoded strings for lines in `[start, end)`.
     pub fn read_lines(&self, start: usize, end: usize) -> Result<Vec<String>> {
         let ofs = self.offsets.read();
-        let mmap = self.mmap.read();
+        let buf = self.bytes_snapshot();
+        let bytes: &[u8] = &buf;
         let n = if ofs.len() <= 1 { 0 } else { ofs.len() - 1 };
         let end = end.min(n);
         if start >= end {
@@ -93,7 +141,7 @@ impl LogFile {
         for i in start..end {
             let lo = ofs[i] as usize;
             let hi = ofs[i + 1] as usize;
-            let slice = &mmap[lo..hi];
+            let slice = &bytes[lo..hi];
             let trimmed = strip_eol(slice);
             let (cow, _, _) = self.encoding.decode(trimmed);
             // Replace tab with 4 spaces and strip other control chars except common
@@ -106,7 +154,8 @@ impl LogFile {
     /// Read arbitrary (not necessarily contiguous) line indices in one pass.
     pub fn read_lines_by_indices(&self, indices: &[u32]) -> Result<Vec<String>> {
         let ofs = self.offsets.read();
-        let mmap = self.mmap.read();
+        let buf = self.bytes_snapshot();
+        let bytes: &[u8] = &buf;
         let n = if ofs.len() <= 1 { 0 } else { ofs.len() - 1 };
         let mut out = Vec::with_capacity(indices.len());
         for &idx in indices {
@@ -117,7 +166,7 @@ impl LogFile {
             }
             let lo = ofs[i] as usize;
             let hi = ofs[i + 1] as usize;
-            let slice = &mmap[lo..hi];
+            let slice = &bytes[lo..hi];
             let trimmed = strip_eol(slice);
             let (cow, _, _) = self.encoding.decode(trimmed);
             out.push(sanitize(cow.as_ref()));
@@ -137,14 +186,12 @@ impl LogFile {
     /// second during drag-scroll.
     pub fn read_lines_packed(&self, start: usize, end: usize) -> Result<Vec<u8>> {
         let ofs = self.offsets.read();
-        let mmap = self.mmap.read();
+        let buf = self.bytes_snapshot();
+        let bytes: &[u8] = &buf;
         let n = if ofs.len() <= 1 { 0 } else { ofs.len() - 1 };
         let end = end.min(n);
         let count = if start >= end { 0 } else { end - start };
 
-        // Pre-size the output buffer from raw byte spans (upper bound; ASCII
-        // logs will match this exactly, non-ASCII may grow slightly after
-        // decode). Growing a Vec is cheap but an accurate reserve is free.
         let mut bytes_guess = 4 + count * 4;
         if count > 0 {
             bytes_guess += (ofs[end] - ofs[start]) as usize;
@@ -158,7 +205,7 @@ impl LogFile {
         for i in start..end {
             let lo = ofs[i] as usize;
             let hi = ofs[i + 1] as usize;
-            let slice = &mmap[lo..hi];
+            let slice = &bytes[lo..hi];
             let trimmed = strip_eol(slice);
             let (cow, _, _) = self.encoding.decode(trimmed);
             let decoded = cow.as_ref();
@@ -171,7 +218,8 @@ impl LogFile {
     /// as `read_lines_packed`.
     pub fn read_lines_by_indices_packed(&self, indices: &[u32]) -> Result<Vec<u8>> {
         let ofs = self.offsets.read();
-        let mmap = self.mmap.read();
+        let buf = self.bytes_snapshot();
+        let bytes: &[u8] = &buf;
         let n = if ofs.len() <= 1 { 0 } else { ofs.len() - 1 };
 
         let mut out: Vec<u8> = Vec::with_capacity(4 + indices.len() * 80);
@@ -185,7 +233,7 @@ impl LogFile {
             }
             let lo = ofs[i] as usize;
             let hi = ofs[i + 1] as usize;
-            let slice = &mmap[lo..hi];
+            let slice = &bytes[lo..hi];
             let trimmed = strip_eol(slice);
             let (cow, _, _) = self.encoding.decode(trimmed);
             write_sanitized(&mut out, cow.as_ref());
@@ -194,7 +242,7 @@ impl LogFile {
     }
 
     /// Read raw bytes of line `idx` (without decoding), used for search.
-    pub fn line_bytes<'a>(&self, mmap: &'a [u8], idx: usize) -> Option<&'a [u8]> {
+    pub fn line_bytes<'a>(&self, bytes: &'a [u8], idx: usize) -> Option<&'a [u8]> {
         let ofs = self.offsets.read();
         let n = if ofs.len() <= 1 { 0 } else { ofs.len() - 1 };
         if idx >= n {
@@ -202,44 +250,57 @@ impl LogFile {
         }
         let lo = ofs[idx] as usize;
         let hi = ofs[idx + 1] as usize;
-        Some(strip_eol(&mmap[lo..hi]))
+        Some(strip_eol(&bytes[lo..hi]))
     }
 
-    /// Re-map the file and append new line offsets. Used by tail watcher
+    /// Re-read the file and append new line offsets. Used by tail watcher
     /// when file size grows.
+    ///
+    /// On rotation/truncation (new size < old size, or first byte
+    /// changed) we do a full reload. Otherwise we only read the tail
+    /// segment `[old_size, new_size)` and extend the buffer in place.
     pub fn refresh_append(&self) -> Result<usize> {
-        let file = open_shared(&self.path)?;
-        let new_len = file.metadata()?.len();
         let old_len = self.size();
+        let new_len = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
 
-        if new_len < old_len {
-            // file was truncated/rotated — re-index from scratch
-            let mmap = unsafe { Mmap::map(&file) }?;
-            let offsets = build_line_offsets(&mmap);
-            *self.mmap.write() = mmap;
-            *self.offsets.write() = offsets;
-            let ofs = self.offsets.read();
-            return Ok(if ofs.len() <= 1 { 0 } else { ofs.len() - 1 });
-        }
         if new_len == old_len {
             let ofs = self.offsets.read();
             return Ok(if ofs.len() <= 1 { 0 } else { ofs.len() - 1 });
         }
 
-        // Remap (mmap is cheap)
-        let mmap = unsafe { Mmap::map(&file) }?;
-        // Scan only the new region [old_len, new_len)
-        let slice = &mmap[old_len as usize..new_len as usize];
+        if new_len < old_len {
+            // file was truncated/rotated — re-index from scratch
+            return self.reload();
+        }
+
+        // Try to extend: read only the new tail bytes.
+        let tail = match slurp_tail(&self.path, old_len) {
+            Ok(t) => t,
+            Err(_) => return self.reload(),
+        };
+
+        // Build new line offsets relative to the full buffer.
         let mut new_offsets: Vec<u64> = Vec::new();
-        for pos in memchr_iter(b'\n', slice) {
-            // offset of next line start = old_len + pos + 1
+        for pos in memchr_iter(b'\n', &tail) {
             let off = old_len + pos as u64 + 1;
             new_offsets.push(off);
         }
+
+        // Swap in extended bytes buffer.
+        let extended: Vec<u8> = {
+            let cur = self.bytes.read().clone();
+            let mut v: Vec<u8> = Vec::with_capacity(cur.len() + tail.len());
+            v.extend_from_slice(&cur);
+            v.extend_from_slice(&tail);
+            v
+        };
+        let final_len = extended.len() as u64;
+        *self.bytes.write() = Arc::new(extended);
+
         {
             let mut o = self.offsets.write();
-            // Replace the trailing sentinel (old file length) with actual line starts,
-            // then push the new sentinel (new file length).
+            // Replace the trailing sentinel (old buffer length) with actual line starts,
+            // then push the new sentinel (new buffer length).
             if let Some(last) = o.last().copied() {
                 if last == old_len {
                     o.pop();
@@ -248,27 +309,30 @@ impl LogFile {
             // If the last pre-existing char wasn't \n, the partial trailing line
             // remains merged into the first new "line" — which is the correct behavior.
             o.extend_from_slice(&new_offsets);
-            o.push(new_len);
+            o.push(final_len);
         }
-        *self.mmap.write() = mmap;
+
         let ofs = self.offsets.read();
         Ok(if ofs.len() <= 1 { 0 } else { ofs.len() - 1 })
     }
 
+    /// Run `f` against an immutable snapshot of the file's bytes. The
+    /// snapshot is held only via an `Arc` clone — no `RwLock` is held
+    /// for the duration of the closure, so this is safe to use from
+    /// long-running parallel scans (search / filter).
     pub fn with_mmap<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
-        let mmap = self.mmap.read();
-        f(&mmap)
+        let snap = self.bytes_snapshot();
+        f(&snap)
     }
 
     /// Force a full reload of the file from disk: re-detect encoding,
-    /// rebuild the offset table, swap in the new mmap. Used by the
-    /// per-tab "reload" button so users can pick up out-of-band changes
-    /// (rotation, truncation, full rewrite) without closing+reopening.
+    /// rebuild the offset table, swap in a fresh byte buffer. Used by
+    /// the per-tab "reload" button and by `refresh_append` whenever
+    /// the file shrinks (rotation / truncation / full rewrite).
     pub fn reload(&self) -> Result<usize> {
-        let file = open_shared(&self.path)?;
-        let mmap = unsafe { Mmap::map(&file) }?;
-        let offsets = build_line_offsets(&mmap);
-        *self.mmap.write() = mmap;
+        let buf = slurp_shared(&self.path)?;
+        let offsets = build_line_offsets(&buf);
+        *self.bytes.write() = Arc::new(buf);
         *self.offsets.write() = offsets;
         let ofs = self.offsets.read();
         Ok(if ofs.len() <= 1 { 0 } else { ofs.len() - 1 })
@@ -281,13 +345,13 @@ impl LogFile {
     }
 }
 
-fn build_line_offsets(mmap: &[u8]) -> Vec<u64> {
-    let mut offsets: Vec<u64> = Vec::with_capacity(mmap.len() / 80 + 2);
+fn build_line_offsets(buf: &[u8]) -> Vec<u64> {
+    let mut offsets: Vec<u64> = Vec::with_capacity(buf.len() / 80 + 2);
     offsets.push(0);
-    for pos in memchr_iter(b'\n', mmap) {
+    for pos in memchr_iter(b'\n', buf) {
         offsets.push(pos as u64 + 1);
     }
-    let total = mmap.len() as u64;
+    let total = buf.len() as u64;
     if offsets.last().copied() != Some(total) {
         offsets.push(total);
     }
@@ -305,19 +369,19 @@ fn strip_eol(slice: &[u8]) -> &[u8] {
     &slice[..end]
 }
 
-fn detect_encoding(mmap: &[u8]) -> &'static Encoding {
+fn detect_encoding(buf: &[u8]) -> &'static Encoding {
     // Check BOM first
-    if mmap.starts_with(&[0xEF, 0xBB, 0xBF]) {
+    if buf.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return UTF_8;
     }
-    if mmap.starts_with(&[0xFF, 0xFE]) {
+    if buf.starts_with(&[0xFF, 0xFE]) {
         return encoding_rs::UTF_16LE;
     }
-    if mmap.starts_with(&[0xFE, 0xFF]) {
+    if buf.starts_with(&[0xFE, 0xFF]) {
         return encoding_rs::UTF_16BE;
     }
     // Sample up to 128KB for detection
-    let sample = &mmap[..mmap.len().min(128 * 1024)];
+    let sample = &buf[..buf.len().min(128 * 1024)];
     let mut det = chardetng::EncodingDetector::new();
     det.feed(sample, true);
     det.guess(None, true)

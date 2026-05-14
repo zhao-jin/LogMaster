@@ -17,7 +17,6 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-memmap2 = "0.9"
 memchr = "2.7"
 regex = "1.10"
 chardetng = "0.1"
@@ -50,6 +49,4 @@ opt-level = 3
 [profile.dev.package.memchr]
 opt-level = 3
 [profile.dev.package.encoding_rs]
-opt-level = 3
-[profile.dev.package.memmap2]
 opt-level = 3
