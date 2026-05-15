@@ -44,6 +44,11 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [folderBrowser, setFolderBrowser] = useState<string | null>(null);
 
+  // Load settings from disk on mount (portable config support).
+  useEffect(() => {
+    useSettingsStore.getState().load();
+  }, []);
+
   // Left-side file explorer — persisted open/closed state.
   const leftOpen = useSettingsStore((s) => s.leftPanelOpen);
   const setSetting = useSettingsStore((s) => s.set);

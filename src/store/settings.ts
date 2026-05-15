@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { invoke } from "@tauri-apps/api/core";
 
 export type Theme = "dark" | "light";
 
@@ -41,20 +41,41 @@ export const DEFAULT_SETTINGS: Settings = {
 interface SettingsState extends Settings {
   set<K extends keyof Settings>(key: K, value: Settings[K]): void;
   reset: () => void;
+  /** Call this once in App.tsx on mount to load from disk. */
+  load: () => Promise<void>;
 }
 
-export const useSettingsStore = create<SettingsState>()(
-  persist(
-    (set) => ({
-      ...DEFAULT_SETTINGS,
-      set: (key, value) => set({ [key]: value } as Partial<SettingsState>),
-      reset: () => set({ ...DEFAULT_SETTINGS }),
-    }),
-    {
-      name: "logmaster:settings",
-      storage: createJSONStorage(() => localStorage),
-      version: 4,
-      migrate: (state) => ({ ...DEFAULT_SETTINGS, ...(state as object) }),
+export const useSettingsStore = create<SettingsState>()((set, get) => ({
+  ...DEFAULT_SETTINGS,
+
+  set: (key, value) => {
+    set({ [key]: value } as Partial<SettingsState>);
+    // Persist to disk (fire-and-forget; we don't want to block the UI).
+    const state = { ...get() };
+    // Remove methods before serializing
+    const { set: _s, reset: _r, load: _l, ...payload } = state;
+    invoke("save_settings", { settings: payload }).catch((e: any) =>
+      console.error("LogMaster: failed to save settings", e)
+    );
+  },
+
+  reset: () => {
+    set({ ...DEFAULT_SETTINGS });
+    const payload = { ...DEFAULT_SETTINGS };
+    invoke("save_settings", { settings: payload }).catch((e: any) =>
+      console.error("LogMaster: failed to save settings", e)
+    );
+  },
+
+  load: async () => {
+    try {
+      const result = await invoke<Settings | null>("get_settings");
+      if (result) {
+        // Merge loaded settings with defaults (graceful migration)
+        set({ ...DEFAULT_SETTINGS, ...result });
+      }
+    } catch (e) {
+      console.error("LogMaster: failed to load settings", e);
     }
-  )
-);
+  },
+}));

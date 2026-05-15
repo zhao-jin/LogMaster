@@ -28,6 +28,7 @@ anyhow = "1"
 thiserror = "1"
 uuid = { version = "1", features = ["v4"] }
 rayon = "1.10"
+dirs = "5"
 
 [profile.release]
 opt-level = 3

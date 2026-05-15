@@ -2,6 +2,7 @@ mod filter;
 mod fs;
 mod log_file;
 mod search;
+mod settings;
 mod tail;
 
 use crate::filter::FilterRule;
@@ -282,6 +283,8 @@ pub fn run() {
             delete_paths,
             file_exists,
             reload_file,
+            settings::get_settings,
+            settings::save_settings,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
