@@ -104,6 +104,11 @@ export function SettingsPanel({ open, onClose }: Props) {
               checked={s.showLineNumbers}
               onChange={(v) => s.set("showLineNumbers", v)}
             />
+            <Toggle
+              label="Word wrap"
+              checked={s.wordWrap}
+              onChange={(v) => s.set("wordWrap", v)}
+            />
           </Section>
 
           <Section title="Tail (live follow)">

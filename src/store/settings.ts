@@ -19,6 +19,8 @@ export interface Settings {
   leftPanelWidth: number;
   /** Whether the left file-explorer panel is visible. */
   leftPanelOpen: boolean;
+  /** Whether to wrap long lines (false = show horizontal scrollbar). */
+  wordWrap: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -33,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidePanelWidth: 380,
   leftPanelWidth: 280,
   leftPanelOpen: true,
+  wordWrap: false,
 };
 
 interface SettingsState extends Settings {
@@ -50,7 +53,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "logmaster:settings",
       storage: createJSONStorage(() => localStorage),
-      version: 3,
+      version: 4,
       migrate: (state) => ({ ...DEFAULT_SETTINGS, ...(state as object) }),
     }
   )

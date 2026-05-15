@@ -94,6 +94,7 @@ export function LogView({
   const fontSize = useSettingsStore((s) => s.fontSize);
   const lineHeight = useSettingsStore((s) => s.lineHeight);
   const showLineNumbers = useSettingsStore((s) => s.showLineNumbers);
+  const wordWrap = useSettingsStore((s) => s.wordWrap);
 
   const allRules = useAppStore((s) => s.rules);
   const rules = useMemo(
@@ -372,7 +373,7 @@ export function LogView({
       tabIndex={0}
     >
       <div
-        className="relative w-full"
+        className={"relative " + (wordWrap ? "w-full" : "inline-block")}
         style={{ height: `${virtualizer.getTotalSize()}px` }}
       >
         {items.map((vi) => {
@@ -401,6 +402,7 @@ export function LogView({
               currentSearchHit={isSearchHit ? currentSearchHit : undefined}
               showLineNumbers={showLineNumbers}
               lineNumWidth={lineNumWidth}
+              wordWrap={wordWrap}
               onToggleBookmark={onToggleBookmark}
               onContextMenu={handleContextMenu}
             />
@@ -433,6 +435,7 @@ interface RowProps {
   currentSearchHit?: { col_start: number; col_end: number };
   showLineNumbers: boolean;
   lineNumWidth: number;
+  wordWrap: boolean;
   onToggleBookmark: (physLine: number) => void;
   onContextMenu: (t: LineMenuTarget) => void;
 }
@@ -449,13 +452,17 @@ const Row = memo(function Row({
   currentSearchHit,
   showLineNumbers,
   lineNumWidth,
+  wordWrap,
   onToggleBookmark,
   onContextMenu,
 }: RowProps) {
   const isBookmarked = !!bookmark;
   return (
     <div
-      className="absolute left-0 right-0 flex hover:bg-bg-hover/40"
+      className={
+        "absolute left-0 flex hover:bg-bg-hover/40 " +
+        (wordWrap ? "right-0" : "")
+      }
       style={{
         transform: `translateY(${start}px)`,
         height: `${size}px`,
@@ -513,7 +520,9 @@ const Row = memo(function Row({
 
       <div
         className={
-          "flex-1 min-w-0 pl-3 pr-2 overflow-hidden whitespace-pre " +
+          (wordWrap
+            ? "flex-1 min-w-0 pl-3 pr-2 overflow-hidden whitespace-pre-wrap "
+            : "shrink-0 pl-3 pr-2 whitespace-pre ") +
           (text === undefined ? "select-none" : "text-fg") +
           (isSearchHit ? " bg-brand/10" : "")
         }
