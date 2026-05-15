@@ -28,6 +28,8 @@ import { useRecentStore } from "../store/recent";
 import { cn, formatRelativeTime } from "../lib/utils";
 import { closeFile, stopTail } from "../lib/ipc";
 import { clearFileCache } from "./LogView";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 /* ------------------------------------------------------------------ */
 /*  Multi-select context                                              */
@@ -220,17 +222,41 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
     }
   }
 
-  // Refresh epoch — bumps every 5s while the explorer is mounted. Each
-  // expanded folder reacts by re-listing its directory. 5s is a sweet
-  // spot: fast enough that mtime sort feels live, slow enough that a
-  // workspace with dozens of expanded folders doesn't hammer the FS.
+  // Refresh epoch — bumps every 30s for sort-order updates (modified time
+  // changes). File add/delete is handled by the backend watcher via the
+  // "fs-change" event (near-instant).
   const [refreshEpoch, setRefreshEpoch] = useState(0);
   useEffect(() => {
     const id = window.setInterval(
       () => setRefreshEpoch((n) => n + 1),
-      5000
+      30_000
     );
     return () => window.clearInterval(id);
+  }, []);
+
+  // Tell the backend which workspace folders to watch for file add/delete.
+  const recentFolders = useRecentStore((s) => s.folders);
+  useEffect(() => {
+    const paths = recentFolders.map((f) => f.path);
+    if (paths.length === 0) return;
+    invoke("watch_workspace_folders", { paths }).catch((e: unknown) =>
+      console.error("LogMaster: failed to set workspace watchers:", e)
+    );
+  }, [recentFolders]);
+
+  // Listen for real-time fs-change events from the backend watcher.
+  // When a file is added/deleted, bump refreshEpoch so all expanded
+  // folders re-list immediately (instead of waiting up to 30s).
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    listen<{ dir_path: string }>("fs-change", () => {
+      setRefreshEpoch((n) => n + 1);
+    }).then((unlisten) => {
+      unlistenFn = unlisten;
+    });
+    return () => {
+      unlistenFn?.();
+    };
   }, []);
 
   return (

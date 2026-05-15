@@ -4,6 +4,7 @@ mod log_file;
 mod search;
 mod settings;
 mod tail;
+mod watcher;
 
 use crate::filter::FilterRule;
 use crate::fs::{DeleteResult, DirEntryInfo};
@@ -285,8 +286,12 @@ pub fn run() {
             reload_file,
             settings::get_settings,
             settings::save_settings,
+            watcher::watch_workspace_folders,
         ])
-        .setup(|_app| Ok(()))
+        .setup(|app| {
+            watcher::init_watcher(app)?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
