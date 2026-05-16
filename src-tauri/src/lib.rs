@@ -157,6 +157,7 @@ async fn filter_lines(
     state: State<'_, AppState>,
     id: String,
     rules: Vec<FilterRule>,
+    combine_mode: filter::FilterCombineMode,
 ) -> Result<Vec<u32>, String> {
     let file = state
         .files
@@ -164,10 +165,12 @@ async fn filter_lines(
         .ok_or_else(|| "file not open".to_string())?
         .clone();
     // Run on blocking pool so we don't block Tauri's async runtime.
-    tauri::async_runtime::spawn_blocking(move || filter::filter_lines(&file, &rules))
-        .await
-        .map_err(|e| format!("join error: {e}"))?
-        .map_err(|e| format!("{e}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        filter::filter_lines(&file, &rules, combine_mode)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
+    .map_err(|e| format!("{e}"))
 }
 
 #[tauri::command(rename_all = "camelCase")]

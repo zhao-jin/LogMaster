@@ -13,6 +13,13 @@ pub enum FilterAction {
 }
 
 #[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterCombineMode {
+    Or,
+    And,
+}
+
+#[derive(Deserialize, Clone, Debug)]
 pub struct FilterRule {
     pub pattern: String,
     #[serde(default)]
@@ -29,7 +36,16 @@ pub struct FilterRule {
 ///     faster than running each Regex independently).
 ///   - Lines are scanned in parallel via rayon, with line offsets snapshotted
 ///     once up-front so worker threads don't fight a RwLock per line.
-pub fn filter_lines(file: &LogFile, rules: &[FilterRule]) -> Result<Vec<u32>> {
+///
+/// Combine mode:
+///   - OR (default): a line is shown if it matches ANY include rule.
+///   - AND: a line is shown only if it matches ALL include rules.
+///   Exclude rules are always OR — matching any exclude rule hides the line.
+pub fn filter_lines(
+    file: &LogFile,
+    rules: &[FilterRule],
+    combine_mode: FilterCombineMode,
+) -> Result<Vec<u32>> {
     let t0 = Instant::now();
 
     let mut inc_patterns: Vec<String> = Vec::new();
@@ -78,6 +94,7 @@ pub fn filter_lines(file: &LogFile, rules: &[FilterRule]) -> Result<Vec<u32>> {
     };
 
     let has_include = inc_set.is_some();
+    let inc_count = inc_patterns.len();
     let n = file.line_count();
     let t_compile = t0.elapsed();
 
@@ -103,7 +120,14 @@ pub fn filter_lines(file: &LogFile, rules: &[FilterRule]) -> Result<Vec<u32>> {
                     let lo = offsets[i] as usize;
                     let hi = offsets[i + 1] as usize;
                     let line = strip_eol(&mmap[lo..hi]);
-                    if check_visibility(line, has_include, &inc_set, &exc_set) {
+                    if check_visibility(
+                        line,
+                        has_include,
+                        &inc_set,
+                        &exc_set,
+                        &combine_mode,
+                        inc_count,
+                    ) {
                         local.push(i as u32);
                     }
                 }
@@ -153,12 +177,20 @@ fn check_visibility(
     has_include: bool,
     inc_set: &Option<RegexSet>,
     exc_set: &Option<RegexSet>,
+    combine_mode: &FilterCombineMode,
+    inc_count: usize,
 ) -> bool {
     let visible = if has_include {
-        inc_set
-            .as_ref()
-            .map(|s| s.is_match(line))
-            .unwrap_or(false)
+        match combine_mode {
+            FilterCombineMode::Or => inc_set
+                .as_ref()
+                .map(|s| s.is_match(line))
+                .unwrap_or(false),
+            FilterCombineMode::And => inc_set
+                .as_ref()
+                .map(|s| s.matches(line).iter().count() == inc_count)
+                .unwrap_or(false),
+        }
     } else {
         true
     };

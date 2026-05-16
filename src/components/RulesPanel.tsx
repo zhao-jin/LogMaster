@@ -23,8 +23,15 @@ interface Props {
 }
 
 export function RulesPanel({ open, onClose }: Props) {
-  const { rules, addRule, updateRule, removeRule, setFilterEnabled } =
-    useAppStore();
+  const {
+    rules,
+    addRule,
+    updateRule,
+    removeRule,
+    setFilterEnabled,
+    filterCombineMode,
+    setFilterCombineMode,
+  } = useAppStore();
   const [libraryOpen, setLibraryOpen] = useState(false);
 
   if (!open) return null;
@@ -78,6 +85,24 @@ export function RulesPanel({ open, onClose }: Props) {
             }
           >
             <Globe className="w-4 h-4" />
+          </button>
+          <button
+            className={cn(
+              "btn font-mono text-xs tabular-nums",
+              filterCombineMode === "and"
+                ? "text-brand bg-brand/10"
+                : "text-fg-subtle"
+            )}
+            onClick={() =>
+              setFilterCombineMode(filterCombineMode === "or" ? "and" : "or")
+            }
+            title={
+              filterCombineMode === "or"
+                ? "Filter mode: OR (any matching rule shows the line). Click to switch to AND."
+                : "Filter mode: AND (all 'Show only' rules must match). Click to switch to OR."
+            }
+          >
+            {filterCombineMode === "or" ? "||" : "&"}
           </button>
           <button
             className={cn("btn", libraryOpen && "bg-bg-hover text-fg")}

@@ -12,6 +12,7 @@ export function useFilter() {
   const activeId = useAppStore((s) => s.activeId);
   const rules = useAppStore((s) => s.rules);
   const filterEnabled = useAppStore((s) => s.filterEnabled);
+  const filterCombineMode = useAppStore((s) => s.filterCombineMode);
   const lineCount = useAppStore(
     (s) => s.tabs.find((t) => t.id === s.activeId)?.line_count ?? 0
   );
@@ -19,16 +20,22 @@ export function useFilter() {
 
   // Stable signature: only meaningful filter-affecting fields.
   const sig = useMemo(() => {
-    return rules
-      .filter((r) => r.enabled && r.pattern.length > 0 && r.filter !== "none")
-      .map(
-        (r) =>
-          `${r.filter}|${r.is_regex ? "re" : "lit"}|${
-            r.case_sensitive ? "cs" : "ci"
-          }|${r.pattern}`
-      )
-      .join("\n");
-  }, [rules]);
+    return (
+      filterCombineMode +
+      "\n" +
+      rules
+        .filter(
+          (r) => r.enabled && r.pattern.length > 0 && r.filter !== "none"
+        )
+        .map(
+          (r) =>
+            `${r.filter}|${r.is_regex ? "re" : "lit"}|${
+              r.case_sensitive ? "cs" : "ci"
+            }|${r.pattern}`
+        )
+        .join("\n")
+    );
+  }, [rules, filterCombineMode]);
 
   // Track the latest in-flight request so we can ignore stale results.
   const requestSeq = useRef(0);
@@ -60,7 +67,7 @@ export function useFilter() {
       timer = null;
       const t0 = performance.now();
       try {
-        const res = await filterLines(activeId, active);
+        const res = await filterLines(activeId, active, filterCombineMode);
         // Stale guard: a newer request superseded us.
         if (seq !== requestSeq.current) return;
         const t1 = performance.now();
@@ -75,7 +82,7 @@ export function useFilter() {
         const t2 = performance.now();
         // eslint-disable-next-line no-console
         console.debug(
-          `[filter] rules=${active.length} hits=${u32.length}/${lineCount}  rust+ipc=${(
+          `[filter] mode=${filterCombineMode} rules=${active.length} hits=${u32.length}/${lineCount}  rust+ipc=${(
             t1 - t0
           ).toFixed(1)}ms  store=${(t2 - t1).toFixed(1)}ms`
         );
@@ -92,5 +99,5 @@ export function useFilter() {
         requestSeq.current++;
       }
     };
-  }, [activeId, sig, filterEnabled, lineCount, rules, updateTab]);
+  }, [activeId, sig, filterEnabled, filterCombineMode, lineCount, rules, updateTab]);
 }

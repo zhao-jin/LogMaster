@@ -23,6 +23,7 @@ export interface SearchHit {
 }
 
 export type FilterMode = "none" | "in" | "out";
+export type FilterCombineMode = "or" | "and";
 
 export interface Rule {
   id: string;
@@ -110,12 +111,14 @@ export interface FilterRuleDto {
 
 export async function filterLines(
   id: string,
-  rules: FilterRuleDto[]
+  rules: FilterRuleDto[],
+  combineMode: FilterCombineMode = "or"
 ): Promise<number[]> {
   // Tauri returns Uint32 as number[] via JSON; use Array.from in case of typed array.
   const r = await invoke<number[] | Uint32Array>("filter_lines", {
     id,
     rules,
+    combineMode,
   });
   return Array.isArray(r) ? r : Array.from(r);
 }

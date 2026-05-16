@@ -5,7 +5,6 @@ import {
   ChevronUp,
   ChevronDown as ChevDown,
   Command as CommandIcon,
-  Filter,
   FileX,
   FolderOpen,
   FolderTree,
@@ -93,8 +92,6 @@ export function TopBar({
     setSearchCase,
     searchWholeWord,
     setSearchWholeWord,
-    filterEnabled,
-    setFilterEnabled,
   } = useAppStore();
   const recent = useRecentStore();
 
@@ -349,15 +346,6 @@ export function TopBar({
       </div>
 
       <Sep />
-
-      <ToggleBtn
-        active={filterEnabled}
-        onClick={() => setFilterEnabled(!filterEnabled)}
-        title="Toggle filter view"
-        label="Filter"
-      >
-        <Filter className="w-4 h-4" />
-      </ToggleBtn>
 
       <ToggleBtn
         active={!!active?.tailing}

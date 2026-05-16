@@ -181,6 +181,8 @@ export function LogView({
   // assume the projection's history was rewritten and clear. Pure
   // tail growth keeps prefix sentinels stable -> cache survives.
   const filterSig = useAppStore((s) =>
+    s.filterCombineMode +
+    "\n" +
     s.rules
       .filter(
         (r) => r.enabled && r.pattern.length > 0 && r.filter !== "none"

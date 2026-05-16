@@ -26,6 +26,9 @@ interface AppState {
   activeId: string | null;
   rules: Rule[];
   filterEnabled: boolean;
+  /** Whether active filter-in rules combine with OR (any match) or AND
+   *  (all must match). Excludes are always OR. */
+  filterCombineMode: "or" | "and";
   searchQuery: string;
   searchIsRegex: boolean;
   searchCaseSensitive: boolean;
@@ -47,6 +50,7 @@ interface AppState {
   setScrollPosition: (top: number, bottom: number) => void;
 
   setFilterEnabled: (v: boolean) => void;
+  setFilterCombineMode: (v: "or" | "and") => void;
 
   addRule: (r: Rule) => void;
   updateRule: (id: string, patch: Partial<Rule>) => void;
@@ -64,6 +68,7 @@ export const useAppStore = create<AppState>((set) => ({
   activeId: null,
   rules: defaultRules(),
   filterEnabled: false,
+  filterCombineMode: "or",
   searchQuery: "",
   searchIsRegex: false,
   searchCaseSensitive: false,
@@ -120,6 +125,7 @@ export const useAppStore = create<AppState>((set) => ({
     ),
 
   setFilterEnabled: (v) => set({ filterEnabled: v }),
+  setFilterCombineMode: (v) => set({ filterCombineMode: v }),
 
   addRule: (r) => set((s) => ({ rules: [...s.rules, normalizeRule(r)] })),
   updateRule: (id, patch) =>
