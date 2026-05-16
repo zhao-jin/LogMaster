@@ -22,6 +22,9 @@ export interface Settings {
   leftPanelOpen: boolean;
   /** Whether to wrap long lines (false = show horizontal scrollbar). */
   wordWrap: boolean;
+  /** Interval (seconds) at which expanded workspace folders re-list to
+   *  refresh modified-time sort order. */
+  folderRefreshIntervalSec: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -38,6 +41,7 @@ export const DEFAULT_SETTINGS: Settings = {
   leftPanelWidth: 280,
   leftPanelOpen: true,
   wordWrap: false,
+  folderRefreshIntervalSec: 45,
 };
 
 interface SettingsState extends Settings {

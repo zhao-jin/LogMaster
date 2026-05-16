@@ -162,6 +162,22 @@ export function SettingsPanel({ open, onClose }: Props) {
             </Field>
           </Section>
 
+          <Section title="Workspace">
+            <Field
+              label="Folder refresh interval"
+              hint="How often expanded workspace folders re-list to refresh sort order. New / deleted files always update instantly via the watcher."
+            >
+              <NumberInput
+                value={s.folderRefreshIntervalSec}
+                min={5}
+                max={3600}
+                step={5}
+                onChange={(v) => s.set("folderRefreshIntervalSec", v)}
+                suffix="s"
+              />
+            </Field>
+          </Section>
+
           <Section title="About">
             <p className="text-sm text-fg-muted">
               LogMaster v0.1.0 — Fast, lightweight, modern log viewer.

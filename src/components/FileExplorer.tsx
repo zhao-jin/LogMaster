@@ -17,6 +17,7 @@ import {
   Folder as FolderIcon,
   RefreshCw,
   Trash2,
+  Eraser,
   X,
   ExternalLink,
   Pin,
@@ -25,6 +26,7 @@ import { listDir, openFile, deletePaths, type DirEntryInfo } from "../lib/ipc";
 import { openDialog, openFolderDialog } from "../lib/dialog";
 import { useAppStore } from "../store/app";
 import { useRecentStore } from "../store/recent";
+import { useSettingsStore } from "../store/settings";
 import { cn, formatRelativeTime } from "../lib/utils";
 import { closeFile, stopTail } from "../lib/ipc";
 import { clearFileCache } from "./LogView";
@@ -222,17 +224,22 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
     }
   }
 
-  // Refresh epoch — bumps every 30s for sort-order updates (modified time
-  // changes). File add/delete is handled by the backend watcher via the
-  // "fs-change" event (near-instant).
+  // Refresh epoch — bumps periodically so expanded folders re-list and
+  // re-sort by modified time. Interval is user-configurable; file
+  // add/delete is handled by the backend watcher via the "fs-change"
+  // event (near-instant).
   const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const folderRefreshIntervalSec = useSettingsStore(
+    (s) => s.folderRefreshIntervalSec
+  );
   useEffect(() => {
+    const sec = Math.max(5, folderRefreshIntervalSec || 45);
     const id = window.setInterval(
       () => setRefreshEpoch((n) => n + 1),
-      30_000
+      sec * 1000
     );
     return () => window.clearInterval(id);
-  }, []);
+  }, [folderRefreshIntervalSec]);
 
   // Tell the backend which workspace folders to watch for file add/delete.
   const recentFolders = useRecentStore((s) => s.folders);
@@ -283,6 +290,7 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
             <FoldersSection
               onContextMenu={setMenu}
               onOpenInBrowser={onOpenFolderBrowser}
+              onRequestDelete={setConfirm}
             />
           </div>
 
@@ -403,11 +411,13 @@ function OpenFilesSection() {
 interface FoldersSectionProps {
   onContextMenu: (m: MenuState) => void;
   onOpenInBrowser?: (path: string) => void;
+  onRequestDelete: (c: ConfirmState) => void;
 }
 
 function FoldersSection({
   onContextMenu,
   onOpenInBrowser,
+  onRequestDelete,
 }: FoldersSectionProps) {
   const folders = useRecentStore((s) => s.folders);
   const removeFolder = useRecentStore((s) => s.removeFolder);
@@ -456,6 +466,7 @@ function FoldersSection({
                 onRemoveRoot={() => removeFolder(f.path)}
                 onOpenInBrowser={onOpenInBrowser}
                 onContextMenu={onContextMenu}
+                onRequestDelete={onRequestDelete}
               />
             ))
           )}
@@ -477,6 +488,7 @@ interface FolderNodeProps {
   onRemoveRoot?: () => void;
   onOpenInBrowser?: (path: string) => void;
   onContextMenu: (m: MenuState) => void;
+  onRequestDelete: (c: ConfirmState) => void;
 }
 
 function FolderTreeNode({
@@ -487,6 +499,7 @@ function FolderTreeNode({
   onRemoveRoot,
   onOpenInBrowser,
   onContextMenu,
+  onRequestDelete,
 }: FolderNodeProps) {
   const [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<DirEntryInfo[] | null>(null);
@@ -542,6 +555,58 @@ function FolderTreeNode({
     [entries]
   );
 
+  /**
+   * Recursively walk the directory tree starting at `path` and collect
+   * every regular-file path. Subdirectories are descended into so that
+   * "clear directory" really empties the folder, but we never include
+   * directory paths themselves — the folder skeleton is preserved.
+   *
+   * Errors on individual subdirs are swallowed (best-effort); the user
+   * sees per-file failures via the post-delete summary alert.
+   */
+  const collectAllFiles = useCallback(
+    async (root: string): Promise<string[]> => {
+      const out: string[] = [];
+      const stack: string[] = [root];
+      while (stack.length > 0) {
+        const dir = stack.pop()!;
+        let es: DirEntryInfo[] = [];
+        try {
+          es = await listDir(dir);
+        } catch {
+          continue;
+        }
+        for (const e of es) {
+          if (e.is_dir) stack.push(e.path);
+          else out.push(e.path);
+        }
+      }
+      return out;
+    },
+    []
+  );
+
+  const handleClear = useCallback(async () => {
+    const files = await collectAllFiles(path);
+    if (files.length === 0) {
+      // Nothing to do — show a hint via the dialog so the user gets
+      // explicit feedback rather than a silent no-op.
+      onRequestDelete({
+        paths: [],
+        recursive: false,
+        summary: `Folder "${name}" contains no files to delete.`,
+        afterRefresh: () => load(false),
+      });
+      return;
+    }
+    onRequestDelete({
+      paths: files,
+      recursive: false,
+      summary: `Delete ALL ${files.length} file(s) inside "${name}"? The folder itself will be kept.`,
+      afterRefresh: () => load(false),
+    });
+  }, [collectAllFiles, path, name, onRequestDelete, load]);
+
   function handleContext(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -570,6 +635,7 @@ function FolderTreeNode({
         onContextMenu={handleContext}
         onRefresh={() => load(false)}
         onRemoveRoot={onRemoveRoot}
+        onClear={handleClear}
         title={path}
       />
       {expanded && (
@@ -608,6 +674,7 @@ function FolderTreeNode({
                 depth={depth + 1}
                 onContextMenu={onContextMenu}
                 onOpenInBrowser={onOpenInBrowser}
+                onRequestDelete={onRequestDelete}
               />
             ) : (
               <FileNodeRow
@@ -637,6 +704,7 @@ function FolderRow({
   onContextMenu,
   onRefresh,
   onRemoveRoot,
+  onClear,
 }: {
   name: string;
   depth: number;
@@ -648,6 +716,7 @@ function FolderRow({
   onContextMenu: (e: React.MouseEvent) => void;
   onRefresh: () => void;
   onRemoveRoot?: () => void;
+  onClear?: () => void;
 }) {
   return (
     <div
@@ -685,6 +754,18 @@ function FolderRow({
           title="Refresh"
         >
           <RefreshCw className="w-3 h-3" />
+        </button>
+      )}
+      {onClear && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onClear();
+          }}
+          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-bg-hover hover:text-danger text-fg-subtle"
+          title="Delete all files inside this folder"
+        >
+          <Eraser className="w-3 h-3" />
         </button>
       )}
       {isRoot && onRemoveRoot && (
