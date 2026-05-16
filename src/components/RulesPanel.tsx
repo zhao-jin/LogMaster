@@ -10,6 +10,7 @@ import {
   Star,
   History,
   ChevronDown,
+  Globe,
 } from "lucide-react";
 import { useAppStore } from "../store/app";
 import type { Rule } from "../lib/ipc";
@@ -45,11 +46,39 @@ export function RulesPanel({ open, onClose }: Props) {
     });
   }
 
+  // True when any rule currently has a "Show only" filter active.
+  const hasShowOnly = rules.some((r) => r.filter === "in");
+
+  // Disable every rule's "Show only" filter so the full log becomes visible.
+  // We don't touch "Hide" rules (filter === "out") or highlighting.
+  function clearShowOnly() {
+    for (const r of rules) {
+      if (r.filter === "in") updateRule(r.id, { filter: "none" });
+    }
+  }
+
   return (
     <aside className="h-full flex flex-col bg-bg-panel">
       <header className="flex items-center justify-between px-3 py-2 border-b border-border">
         <h3 className="text-sm font-semibold text-fg">Rules</h3>
         <div className="flex items-center gap-1">
+          <button
+            className={cn(
+              "btn",
+              hasShowOnly
+                ? "text-brand hover:text-brand"
+                : "text-fg-subtle"
+            )}
+            onClick={clearShowOnly}
+            disabled={!hasShowOnly}
+            title={
+              hasShowOnly
+                ? "Show all lines — turn OFF every rule's 'Show only' filter"
+                : "All lines already visible (no 'Show only' filters active)"
+            }
+          >
+            <Globe className="w-4 h-4" />
+          </button>
           <button
             className={cn("btn", libraryOpen && "bg-bg-hover text-fg")}
             onClick={() => setLibraryOpen((v) => !v)}

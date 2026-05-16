@@ -64,6 +64,21 @@ export function SettingsPanel({ open, onClose }: Props) {
                 ))}
               </div>
             </Field>
+            <Field label="Font family" hint="Editor font family (monospace recommended).">
+              <select
+                className="input"
+                value={s.fontFamily}
+                onChange={(e) => s.set("fontFamily", e.target.value)}
+              >
+                <option value="Consolas, 'Courier New', monospace">Consolas</option>
+                <option value="'Courier New', Courier, monospace">Courier New</option>
+                <option value="'Lucida Console', Monaco, monospace">Lucida Console</option>
+                <option value="Monaco, 'Courier New', monospace">Monaco</option>
+                <option value="'Source Code Pro', Consolas, monospace">Source Code Pro</option>
+                <option value="'Fira Code', Consolas, monospace">Fira Code</option>
+                <option value="monospace">System Monospace</option>
+              </select>
+            </Field>
             <Field label="Font size" hint="Editor font size in pixels.">
               <NumberInput
                 value={s.fontSize}

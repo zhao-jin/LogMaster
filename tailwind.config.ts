@@ -5,33 +5,35 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Modern dark IDE palette
+        // Eye-care dark palette — warm, low blue-light, easy on the eyes
+        // for long log-viewing sessions. Slight green/grey tint reduces
+        // contrast fatigue without losing readability.
         bg: {
-          DEFAULT: "#0b1220",
-          panel: "#0f172a",
-          elevated: "#111c2e",
-          hover: "#1a2436",
+          DEFAULT: "#1b201c",   // main editor bg — warm dark olive-grey
+          panel: "#222824",     // side panels
+          elevated: "#2a302c",  // popovers, inputs
+          hover: "#323a35",     // row hover
         },
         border: {
-          DEFAULT: "#1e293b",
-          strong: "#334155",
+          DEFAULT: "#2f3833",
+          strong: "#475048",
         },
         fg: {
-          DEFAULT: "#e2e8f0",
-          muted: "#94a3b8",
-          subtle: "#64748b",
+          DEFAULT: "#d6d2c7",   // warm off-white — easy on eyes
+          muted: "#9aa39c",
+          subtle: "#6b746e",
         },
         accent: {
-          DEFAULT: "#22c55e",   // run green
-          hover: "#16a34a",
+          DEFAULT: "#7cb342",   // softer leaf-green
+          hover: "#689f38",
         },
         brand: {
-          DEFAULT: "#3b82f6",
-          hover: "#2563eb",
+          DEFAULT: "#5b9bd5",   // softer steel-blue (less harsh than pure blue)
+          hover: "#4a8bc4",
         },
-        danger: "#ef4444",
-        warn: "#f59e0b",
-        info: "#38bdf8",
+        danger: "#e57373",
+        warn: "#e0b85c",
+        info: "#7fb3d5",
       },
       fontFamily: {
         sans: ["Inter", "Poppins", "system-ui", "sans-serif"],

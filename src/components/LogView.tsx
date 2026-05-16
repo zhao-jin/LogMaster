@@ -90,9 +90,60 @@ export function LogView({
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [, force] = useState(0);
   const [menu, setMenu] = useState<LineMenuTarget | null>(null);
+  const [selectedText, setSelectedText] = useState<string | undefined>(undefined);
+
+  // Auto-highlight selected text in all lines.
+  // IMPORTANT: re-rendering replaces DOM nodes for the selected line
+  // (renderLine wraps matches in <span>), which destroys the native
+  // Selection. After applying the highlight we re-create a Range that
+  // covers the same characters so Ctrl+C still copies what the user
+  // visually selected.
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    const onMouseUp = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+        setSelectedText(undefined);
+        return;
+      }
+      const txt = sel.toString();
+      const trimmed = txt.trim();
+      // Only highlight single-line, non-trivial selections.
+      if (trimmed.length >= 2 && !trimmed.includes("\n")) {
+        // Snapshot the selected text BEFORE React re-renders. We then
+        // re-apply the selection on the new DOM after commit so the
+        // browser's clipboard still sees a valid selection.
+        const target = txt;
+        setSelectedText(trimmed);
+        // Re-select on the next frame, after React has committed the
+        // re-render that replaces highlighted spans.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => restoreSelection(el, target));
+        });
+      } else {
+        setSelectedText(undefined);
+      }
+    };
+    el.addEventListener("mouseup", onMouseUp);
+    return () => el.removeEventListener("mouseup", onMouseUp);
+  }, []);
+
+  // Clear selection highlight on Escape
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedText(undefined);
+        window.getSelection()?.removeAllRanges();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const fontSize = useSettingsStore((s) => s.fontSize);
   const lineHeight = useSettingsStore((s) => s.lineHeight);
+  const fontFamily = useSettingsStore((s) => s.fontFamily);
   const showLineNumbers = useSettingsStore((s) => s.showLineNumbers);
   const wordWrap = useSettingsStore((s) => s.wordWrap);
 
@@ -212,6 +263,13 @@ export function LogView({
     // on mouse-wheel / trackpad, while keeping frame cost low during
     // drag-scroll (fewer row nodes to reconcile).
     overscan: 120,
+    // In word-wrap mode, individual rows can have different heights
+    // depending on how many visual lines they wrap into. Let the
+    // virtualizer measure each row's actual rendered height.
+    measureElement:
+      wordWrap && typeof window !== "undefined"
+        ? (el) => el.getBoundingClientRect().height
+        : undefined,
   });
 
   const inflight = useRef<Map<string, Set<number>>>(new Map());
@@ -301,15 +359,26 @@ export function LogView({
       requestPrefetch();
     }
     el.addEventListener("scroll", onScroll, { passive: true });
+    let lastWidth = el.clientWidth;
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => prefetchVisible.current());
+      // When the viewport width changes in word-wrap mode, previously
+      // wrapped rows may now fit on one line (or vice versa). The
+      // virtualizer caches per-row measured heights, so without
+      // invalidation we end up with phantom gaps where tall rows used
+      // to be. Force a re-measure on width changes.
+      const w = el.clientWidth;
+      if (w !== lastWidth) {
+        lastWidth = w;
+        if (wordWrap) virtualizer.measure();
+      }
     });
     ro.observe(el);
     return () => {
       el.removeEventListener("scroll", onScroll);
       ro.disconnect();
     };
-  }, [virtualizer, visibleLines]);
+  }, [virtualizer, visibleLines, wordWrap]);
 
   const items = virtualizer.getVirtualItems();
   useEffect(() => {
@@ -320,6 +389,12 @@ export function LogView({
     if (!followTail || totalRows === 0) return;
     virtualizer.scrollToIndex(totalRows - 1, { align: "end" });
   }, [lineCount, followTail, virtualizer, totalRows]);
+
+  // Reset measurement cache when wrap mode or font metrics change so the
+  // virtualizer recomputes row heights on the fly.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [wordWrap, fontSize, lineHeight, virtualizer]);
 
   useEffect(() => {
     if (scrollTo == null) return;
@@ -364,10 +439,11 @@ export function LogView({
   return (
     <div
       ref={parentRef}
-      className="h-full w-full overflow-auto font-mono bg-bg"
+      className="h-full w-full overflow-auto bg-bg"
       style={{
         fontSize: `${fontSize}px`,
         lineHeight: `${lineHeight}px`,
+        fontFamily: fontFamily,
         contain: "strict",
       }}
       tabIndex={0}
@@ -400,9 +476,11 @@ export function LogView({
               compiledRules={compiledRules}
               isSearchHit={isSearchHit}
               currentSearchHit={isSearchHit ? currentSearchHit : undefined}
+              selectedText={selectedText}
               showLineNumbers={showLineNumbers}
               lineNumWidth={lineNumWidth}
               wordWrap={wordWrap}
+              measureElement={wordWrap ? virtualizer.measureElement : undefined}
               onToggleBookmark={onToggleBookmark}
               onContextMenu={handleContextMenu}
             />
@@ -433,9 +511,11 @@ interface RowProps {
   compiledRules: CompiledRule[];
   isSearchHit: boolean;
   currentSearchHit?: { col_start: number; col_end: number };
+  selectedText?: string;
   showLineNumbers: boolean;
   lineNumWidth: number;
   wordWrap: boolean;
+  measureElement?: (node: Element | null) => void;
   onToggleBookmark: (physLine: number) => void;
   onContextMenu: (t: LineMenuTarget) => void;
 }
@@ -450,26 +530,36 @@ const Row = memo(function Row({
   compiledRules,
   isSearchHit,
   currentSearchHit,
+  selectedText,
   showLineNumbers,
   lineNumWidth,
   wordWrap,
+  measureElement,
   onToggleBookmark,
   onContextMenu,
 }: RowProps) {
   const isBookmarked = !!bookmark;
   return (
     <div
+      ref={measureElement}
+      data-index={viewIdx}
       className={
         "absolute left-0 flex hover:bg-bg-hover/40 " +
         (wordWrap ? "right-0" : "")
       }
       style={{
         transform: `translateY(${start}px)`,
-        height: `${size}px`,
-        // Let the compositor skip layout/paint for off-screen rows entirely.
-        // Webview2 is Chromium-based, so content-visibility works here.
-        contentVisibility: "auto",
-        containIntrinsicSize: `${size}px`,
+        // In word-wrap mode, let the row grow as content wraps.
+        // In fixed-height mode, use the estimated size for performance.
+        ...(wordWrap
+          ? { minHeight: `${size}px` }
+          : {
+              height: `${size}px`,
+              // Let the compositor skip layout/paint for off-screen rows entirely.
+              // Webview2 is Chromium-based, so content-visibility works here.
+              contentVisibility: "auto",
+              containIntrinsicSize: `${size}px`,
+            }),
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -521,20 +611,20 @@ const Row = memo(function Row({
       <div
         className={
           (wordWrap
-            ? "flex-1 min-w-0 pl-3 pr-2 overflow-hidden whitespace-pre-wrap "
+            ? "flex-1 min-w-0 pl-3 pr-2 whitespace-pre-wrap break-all py-0 "
             : "shrink-0 pl-3 pr-2 whitespace-pre ") +
           (text === undefined ? "select-none" : "text-fg") +
           (isSearchHit ? " bg-brand/10" : "")
         }
-        style={text === undefined ? { color: "#334155" } : undefined}
+        style={text === undefined ? { color: "#3a423d" } : undefined}
       >
         {text === undefined ? (
           <span aria-hidden="true">{ghostFor(viewIdx)}</span>
-        ) : compiledRules.length === 0 && !currentSearchHit ? (
+        ) : compiledRules.length === 0 && !currentSearchHit && !selectedText ? (
           // Fast path: no highlighting required → emit raw text.
           text
         ) : (
-          renderLine(text, compiledRules, currentSearchHit)
+          renderLine(text, compiledRules, currentSearchHit, selectedText)
         )}
       </div>
     </div>
@@ -562,6 +652,64 @@ function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Re-create a Selection that visually covers `target` inside `root`.
+ *
+ * Why we need this: when the user selects text in a Row, our React
+ * render swaps the line's text node for a series of <span>s (to apply
+ * the auto-highlight). That mutation drops the browser's native
+ * Selection, so Ctrl+C copies nothing. After the commit we walk the
+ * fresh DOM, locate the same character sequence, and re-anchor a
+ * Range across however many text nodes it now spans.
+ */
+function restoreSelection(root: HTMLElement, target: string) {
+  if (!target) return;
+  const sel = window.getSelection();
+  if (!sel) return;
+
+  // Collect text nodes in document order along with their offsets in a
+  // virtual concatenated string so we can match across <span> splits.
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes: { node: Text; start: number; end: number }[] = [];
+  let combined = "";
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const t = n as Text;
+    const len = t.data.length;
+    nodes.push({ node: t, start: combined.length, end: combined.length + len });
+    combined += t.data;
+  }
+  const idx = combined.indexOf(target);
+  if (idx < 0) return;
+  const endIdx = idx + target.length;
+
+  let startNode: Text | null = null;
+  let startOffset = 0;
+  let endNode: Text | null = null;
+  let endOffset = 0;
+  for (const e of nodes) {
+    if (!startNode && idx >= e.start && idx <= e.end) {
+      startNode = e.node;
+      startOffset = idx - e.start;
+    }
+    if (endIdx >= e.start && endIdx <= e.end) {
+      endNode = e.node;
+      endOffset = endIdx - e.start;
+      break;
+    }
+  }
+  if (!startNode || !endNode) return;
+  try {
+    const range = document.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch {
+    /* DOM may have changed mid-flight; ignore */
+  }
+}
+
 type CompiledRule = {
   id: string;
   fg?: string;
@@ -574,13 +722,14 @@ interface Span {
   start: number;
   end: number;
   style: React.CSSProperties;
-  kind: "rule" | "search";
+  kind: "rule" | "search" | "selection";
 }
 
 function renderLine(
   text: string,
   rules: CompiledRule[],
-  currentHit?: { col_start: number; col_end: number }
+  currentHit?: { col_start: number; col_end: number },
+  selectedText?: string | null
 ) {
   // Fast path handled at the caller; if we reach here there's at least
   // one rule or a search hit.
@@ -605,7 +754,6 @@ function renderLine(
           backgroundColor: r.bg,
           fontWeight: r.bold ? 600 : undefined,
           borderRadius: 2,
-          padding: "0 1px",
         },
         kind: "rule",
       });
@@ -617,13 +765,37 @@ function renderLine(
       start: currentHit.col_start,
       end: currentHit.col_end,
       style: {
-        backgroundColor: "#fde047",
-        color: "#0b1220",
+        backgroundColor: "#e0b85c",
+        color: "#1b201c",
         borderRadius: 2,
         fontWeight: 700,
       },
       kind: "search",
     });
+  }
+
+  // Highlight selected text across all lines
+  if (selectedText && selectedText.length >= 2) {
+    const escaped = selectedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(escaped, "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m[0].length === 0) {
+        re.lastIndex++;
+        continue;
+      }
+      spans.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        style: {
+          backgroundColor: "#7cb342",
+          color: "#1b201c",
+          borderRadius: 2,
+          fontWeight: 600,
+        },
+        kind: "selection",
+      });
+    }
   }
 
   if (spans.length === 0) return text;

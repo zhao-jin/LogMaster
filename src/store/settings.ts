@@ -7,6 +7,7 @@ export interface Settings {
   theme: Theme;
   fontSize: number;          // px
   lineHeight: number;        // px
+  fontFamily: string;        // CSS font-family
   tabSize: number;           // spaces
   followTailDefault: boolean;
   showLineNumbers: boolean;
@@ -27,6 +28,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   fontSize: 13,
   lineHeight: 20,
+  fontFamily: "Consolas, 'Courier New', monospace",
   tabSize: 4,
   followTailDefault: true,
   showLineNumbers: true,
