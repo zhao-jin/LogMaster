@@ -65,12 +65,25 @@ function useSelection() {
 }
 
 /**
- * Counter that ticks every few seconds. Expanded folder nodes subscribe
- * to it and re-listDir on each tick so users see new / deleted files
- * appear/disappear without manual refresh. Collapsed nodes don't read
- * this value, so they cost nothing.
+ * Counter that ticks periodically (controlled by `fileStatusRefreshIntervalSec`).
+ * Expanded folder nodes subscribe to it and merge new/deleted files
+ * and update file status without re-sorting the list. Collapsed nodes
+ * don't read this value, so they cost nothing.
+ *
+ * New files are appended to the end of the list; the `SortEpochContext`
+ * timer (controlled by `fileSortIntervalSec`) handles full re-sorting
+ * by modified time.
  */
-const RefreshEpochContext = createContext<number>(0);
+const StatusEpochContext = createContext<number>(0);
+
+/**
+ * Counter that ticks periodically (controlled by `fileSortIntervalSec`).
+ * Expanded folder nodes subscribe to it and re-listDir with full
+ * re-sort by modified time.
+ * This is separate from `StatusEpochContext` so that normal refreshes
+ * (which only merge changes) don't cause the list to re-sort.
+ */
+const SortEpochContext = createContext<number>(0);
 
 interface MenuState {
   x: number;
@@ -224,22 +237,36 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
     }
   }
 
-  // Refresh epoch — bumps periodically so expanded folders re-list and
-  // re-sort by modified time. Interval is user-configurable; file
-  // add/delete is handled by the backend watcher via the "fs-change"
-  // event (near-instant).
-  const [refreshEpoch, setRefreshEpoch] = useState(0);
-  const folderRefreshIntervalSec = useSettingsStore(
-    (s) => s.folderRefreshIntervalSec
+  // Status epoch — bumps periodically so expanded folders merge
+  // new/deleted files and update file status (size, modified time, etc.)
+  // without re-sorting. Interval is user-configurable (default 5 s).
+  const [statusEpoch, setStatusEpoch] = useState(0);
+  const fileStatusRefreshIntervalSec = useSettingsStore(
+    (s) => s.fileStatusRefreshIntervalSec
   );
   useEffect(() => {
-    const sec = Math.max(5, folderRefreshIntervalSec || 45);
+    const sec = Math.max(1, fileStatusRefreshIntervalSec ?? 5);
     const id = window.setInterval(
-      () => setRefreshEpoch((n) => n + 1),
+      () => setStatusEpoch((n) => n + 1),
       sec * 1000
     );
     return () => window.clearInterval(id);
-  }, [folderRefreshIntervalSec]);
+  }, [fileStatusRefreshIntervalSec]);
+
+  // Sort epoch — bumps periodically to trigger a full re-sort
+  // by modified time. Interval is user-configurable (default 60 s).
+  const [sortEpoch, setSortEpoch] = useState(0);
+  const fileSortIntervalSec = useSettingsStore(
+    (s) => s.fileSortIntervalSec
+  );
+  useEffect(() => {
+    const sec = Math.max(5, fileSortIntervalSec ?? 60);
+    const id = window.setInterval(
+      () => setSortEpoch((n) => n + 1),
+      sec * 1000
+    );
+    return () => window.clearInterval(id);
+  }, [fileSortIntervalSec]);
 
   // Tell the backend which workspace folders to watch for file add/delete.
   const recentFolders = useRecentStore((s) => s.folders);
@@ -252,12 +279,12 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
   }, [recentFolders]);
 
   // Listen for real-time fs-change events from the backend watcher.
-  // When a file is added/deleted, bump refreshEpoch so all expanded
-  // folders re-list immediately (instead of waiting up to 30s).
+  // When a file is added/deleted, bump statusEpoch so all expanded
+  // folders merge changes immediately (instead of waiting for the timer).
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
     listen<{ dir_path: string }>("fs-change", () => {
-      setRefreshEpoch((n) => n + 1);
+      setStatusEpoch((n) => n + 1);
     }).then((unlisten) => {
       unlistenFn = unlisten;
     });
@@ -268,7 +295,8 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
 
   return (
     <SelectionContext.Provider value={ctx}>
-      <RefreshEpochContext.Provider value={refreshEpoch}>
+      <StatusEpochContext.Provider value={statusEpoch}>
+        <SortEpochContext.Provider value={sortEpoch}>
         <aside
           className="h-full flex flex-col bg-bg-panel text-sm"
           onClick={(e) => {
@@ -310,7 +338,8 @@ export function FileExplorer({ onOpenFolderBrowser }: ExplorerProps = {}) {
             onConfirm={handleDelete}
           />
         </aside>
-      </RefreshEpochContext.Provider>
+        </SortEpochContext.Provider>
+      </StatusEpochContext.Provider>
     </SelectionContext.Provider>
   );
 }
@@ -505,14 +534,15 @@ function FolderTreeNode({
   const [entries, setEntries] = useState<DirEntryInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const refreshEpoch = useContext(RefreshEpochContext);
+  const statusEpoch = useContext(StatusEpochContext);
+  const sortEpoch = useContext(SortEpochContext);
 
   // Track if a refresh is already in flight to coalesce overlapping ticks.
   const inflight = useRef(false);
 
   const load = useCallback(
-    async (silent = false) => {
-      if (inflight.current) return;
+    async (silent = false, replace = false, force = false) => {
+      if (inflight.current && !force) return;
       inflight.current = true;
       if (!silent) {
         setLoading(true);
@@ -520,8 +550,20 @@ function FolderTreeNode({
       }
       try {
         const es = await listDir(path);
-        // Backend already sorts: folders first, then files by modified desc.
-        setEntries(es);
+        if (replace || entries === null) {
+          // Full replace: re-sort by modified time.
+          setEntries(es);
+        } else {
+          // Merge: preserve order of existing entries, append new ones.
+          setEntries((prev) => {
+            if (prev === null) return es;
+            const prevPaths = new Set(prev.map((e) => e.path));
+            const newPaths = new Set(es.map((e) => e.path));
+            const kept = prev.filter((e) => newPaths.has(e.path));
+            const added = es.filter((e) => !prevPaths.has(e.path));
+            return [...kept, ...added];
+          });
+        }
         if (!silent) setError(null);
       } catch (e) {
         // Background refresh shouldn't replace good entries with an error.
@@ -531,23 +573,27 @@ function FolderTreeNode({
         if (!silent) setLoading(false);
       }
     },
-    [path]
+    [path, entries]
   );
 
-  // Initial load on first expand.
+  // Initial load on first expand (full replace).
   useEffect(() => {
     if (expanded && entries === null && !loading) {
-      load(false);
+      load(false, true);
     }
   }, [expanded, entries, loading, load]);
 
-  // Periodic background refresh — only when this node is expanded so that
-  // collapsed roots cost nothing. Silent reload preserves error/loading
-  // state to avoid UI flicker.
+  // Periodic background refresh — merge mode (don't re-sort).
   useEffect(() => {
     if (!expanded || entries === null) return;
-    load(true);
-  }, [refreshEpoch, expanded, entries, load]);
+    load(true, false);
+      }, [statusEpoch, expanded, load]);
+
+  // Sort timer — full replace with re-sort by modified time.
+  useEffect(() => {
+    if (!expanded || entries === null) return;
+    load(true, true);
+  }, [sortEpoch, expanded, load]);
 
   // Children files in display order — used as siblings for shift-range.
   const fileSiblings = useMemo(
@@ -595,7 +641,7 @@ function FolderTreeNode({
         paths: [],
         recursive: false,
         summary: `Folder "${name}" contains no files to delete.`,
-        afterRefresh: () => load(false),
+        afterRefresh: () => load(false, true),
       });
       return;
     }
@@ -603,7 +649,7 @@ function FolderTreeNode({
       paths: files,
       recursive: false,
       summary: `Delete ALL ${files.length} file(s) inside "${name}"? The folder itself will be kept.`,
-      afterRefresh: () => load(false),
+      afterRefresh: () => load(false, true),
     });
   }, [collectAllFiles, path, name, onRequestDelete, load]);
 
@@ -617,7 +663,7 @@ function FolderTreeNode({
       primary: path,
       isFolder: true,
       isRoot,
-      onRefresh: () => load(false),
+      onRefresh: () => load(false, true, true),
       onRemoveRoot: isRoot ? onRemoveRoot : undefined,
       onReveal: onOpenInBrowser,
     });
@@ -633,7 +679,7 @@ function FolderTreeNode({
         loading={loading}
         onClick={() => setExpanded((v) => !v)}
         onContextMenu={handleContext}
-        onRefresh={() => load(false)}
+        onRefresh={() => load(false, true, true)}
         onRemoveRoot={onRemoveRoot}
         onClear={handleClear}
         title={path}
@@ -682,7 +728,7 @@ function FolderTreeNode({
                 entry={e}
                 depth={depth + 1}
                 siblings={fileSiblings}
-                onRefreshDir={() => load(false)}
+                onRefreshDir={() => load(false, true, true)}
                 onContextMenu={onContextMenu}
               />
             )

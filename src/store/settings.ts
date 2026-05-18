@@ -22,9 +22,12 @@ export interface Settings {
   leftPanelOpen: boolean;
   /** Whether to wrap long lines (false = show horizontal scrollbar). */
   wordWrap: boolean;
-  /** Interval (seconds) at which expanded workspace folders re-list to
-   *  refresh modified-time sort order. */
-  folderRefreshIntervalSec: number;
+  /** Interval (seconds) for refreshing file status (size, modified time, etc.).
+   *  Files are merged into the list without changing sort order. */
+  fileStatusRefreshIntervalSec: number;
+  /** Interval (seconds) for re-sorting the file list by modified time.
+   *  Independent from status refresh. */
+  fileSortIntervalSec: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -41,7 +44,8 @@ export const DEFAULT_SETTINGS: Settings = {
   leftPanelWidth: 280,
   leftPanelOpen: true,
   wordWrap: false,
-  folderRefreshIntervalSec: 45,
+  fileStatusRefreshIntervalSec: 5,
+  fileSortIntervalSec: 60,
 };
 
 interface SettingsState extends Settings {
@@ -77,8 +81,17 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     try {
       const result = await invoke<Settings | null>("get_settings");
       if (result) {
+        // Migrate old field name (folderRefreshIntervalSec → fileStatusRefreshIntervalSec)
+        const migrated = { ...result } as any;
+        if (
+          migrated.folderRefreshIntervalSec !== undefined &&
+          migrated.fileStatusRefreshIntervalSec === undefined
+        ) {
+          migrated.fileStatusRefreshIntervalSec = migrated.folderRefreshIntervalSec;
+          delete (migrated as any).folderRefreshIntervalSec;
+        }
         // Merge loaded settings with defaults (graceful migration)
-        set({ ...DEFAULT_SETTINGS, ...result });
+        set({ ...DEFAULT_SETTINGS, ...migrated });
       }
     } catch (e) {
       console.error("LogMaster: failed to load settings", e);

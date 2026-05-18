@@ -164,15 +164,28 @@ export function SettingsPanel({ open, onClose }: Props) {
 
           <Section title="Workspace">
             <Field
-              label="Folder refresh interval"
-              hint="How often expanded workspace folders re-list to refresh sort order. New / deleted files always update instantly via the watcher."
+              label="File status refresh interval"
+              hint="How often expanded folders update file status (size, modified time). New/deleted files update instantly via the watcher. Merge only — does not change sort order."
             >
               <NumberInput
-                value={s.folderRefreshIntervalSec}
+                value={s.fileStatusRefreshIntervalSec}
+                min={1}
+                max={3600}
+                step={1}
+                onChange={(v) => s.set("fileStatusRefreshIntervalSec", v)}
+                suffix="s"
+              />
+            </Field>
+            <Field
+              label="File sort interval"
+              hint="How often the file list is re-sorted by modified time. Independent from status refresh."
+            >
+              <NumberInput
+                value={s.fileSortIntervalSec}
                 min={5}
                 max={3600}
                 step={5}
-                onChange={(v) => s.set("folderRefreshIntervalSec", v)}
+                onChange={(v) => s.set("fileSortIntervalSec", v)}
                 suffix="s"
               />
             </Field>
