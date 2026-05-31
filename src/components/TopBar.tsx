@@ -21,6 +21,7 @@ import {
   Copy as RestoreIcon,
   Trash2,
   WholeWord,
+  WrapText,
   X,
   Zap,
 } from "lucide-react";
@@ -34,6 +35,7 @@ import {
 import { useEffect, useState } from "react";
 import { useAppStore } from "../store/app";
 import { useRecentStore } from "../store/recent";
+import { useSettingsStore } from "../store/settings";
 import { openDialog, openFolderDialog } from "../lib/dialog";
 import {
   closeFile,
@@ -94,6 +96,7 @@ export function TopBar({
     setSearchWholeWord,
   } = useAppStore();
   const recent = useRecentStore();
+  const { wordWrap, set: setSetting } = useSettingsStore();
 
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
@@ -360,6 +363,15 @@ export function TopBar({
         ) : (
           <Radio className="w-4 h-4" />
         )}
+      </ToggleBtn>
+
+      <ToggleBtn
+        active={wordWrap}
+        onClick={() => setSetting("wordWrap", !wordWrap)}
+        title="Word wrap"
+        label="Wrap"
+      >
+        <WrapText className="w-4 h-4" />
       </ToggleBtn>
 
       <IconBtn onClick={onToggleBookmarks} title="Bookmarks">

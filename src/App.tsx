@@ -23,7 +23,7 @@ import { useFileDrop } from "./hooks/useFileDrop";
 import { useFileWatchdog } from "./hooks/useFileWatchdog";
 import { closeFile, stopTail } from "./lib/ipc";
 import { clearFileCache } from "./components/LogView";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type SidePanel = "rules" | "bookmarks" | null;
 
@@ -42,6 +42,7 @@ export default function App() {
   const [side, setSide] = useState<SidePanel>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gotoLineOpen, setGotoLineOpen] = useState(false);
   const [folderBrowser, setFolderBrowser] = useState<string | null>(null);
 
   // Load settings from disk on mount (portable config support).
@@ -169,8 +170,7 @@ export default function App() {
         input?.select();
       } else if (mod && e.key.toLowerCase() === "g") {
         e.preventDefault();
-        if (e.shiftKey) search.prev();
-        else search.next();
+        setGotoLineOpen(true);
       } else if (e.key === "F3") {
         e.preventDefault();
         if (e.shiftKey) search.prev();
@@ -298,6 +298,16 @@ export default function App() {
         initialPath={folderBrowser}
         onClose={() => setFolderBrowser(null)}
       />
+      <GotoLineDialog
+        open={gotoLineOpen}
+        onClose={() => setGotoLineOpen(false)}
+        onJump={(line) => {
+          if (!active) return;
+          setScrollTo(active.id, line);
+          setGotoLineOpen(false);
+        }}
+        lineCount={active?.line_count ?? 0}
+      />
 
       {dropHover && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-brand/15 backdrop-blur-sm pointer-events-none">
@@ -327,6 +337,88 @@ export default function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function GotoLineDialog({
+  open,
+  onClose,
+  onJump,
+  lineCount,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onJump: (line: number) => void;
+  lineCount: number;
+}) {
+  const [value, setValue] = useState("");
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setValue("");
+      return;
+    }
+    // Auto-focus and select on open
+    const id = setTimeout(() => {
+      ref.current?.focus();
+      ref.current?.select();
+    }, 50);
+    return () => clearTimeout(id);
+  }, [open]);
+
+  function handleSubmit() {
+    const n = Number(value);
+    if (n > 0 && n <= lineCount) {
+      onJump(n - 1); // Convert to 0-based
+    } else if (lineCount > 0) {
+      onJump(Math.min(n - 1, Math.max(0, lineCount - 1)));
+    }
+  }
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[55] bg-black/40 flex items-start justify-center pt-[20vh]"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[380px] rounded-lg border border-border bg-bg-panel shadow-2xl overflow-hidden"
+      >
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+          <span className="text-sm font-semibold text-fg">Go to Line</span>
+          <span className="text-xs text-fg-subtle ml-auto">
+            {lineCount > 0 ? `1 – ${lineCount}` : "no file"}
+          </span>
+        </div>
+        <div className="p-4 flex gap-2">
+          <input
+            ref={ref}
+            type="number"
+            min={1}
+            max={lineCount || undefined}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSubmit();
+              else if (e.key === "Escape") onClose();
+            }}
+            placeholder={`1${lineCount > 0 ? `–${lineCount}` : ""}`}
+            className="input w-full h-9 tabular-nums"
+          />
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!value || lineCount === 0}
+            className="btn btn-primary px-3 h-9 text-sm shrink-0"
+          >
+            Go
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
