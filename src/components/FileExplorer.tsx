@@ -554,14 +554,17 @@ function FolderTreeNode({
           // Full replace: re-sort by modified time.
           setEntries(es);
         } else {
-          // Merge: preserve order of existing entries, append new ones.
+          // Merge: preserve order of existing entries, update metadata
+          // (size, modified time) from fresh API response.
           setEntries((prev) => {
             if (prev === null) return es;
+            const fresh = new Map(es.map((e) => [e.path, e]));
             const prevPaths = new Set(prev.map((e) => e.path));
-            const newPaths = new Set(es.map((e) => e.path));
-            const kept = prev.filter((e) => newPaths.has(e.path));
+            const updated = prev
+              .map((old) => fresh.get(old.path) ?? old)
+              .filter((e) => es.some((f) => f.path === e.path));
             const added = es.filter((e) => !prevPaths.has(e.path));
-            return [...kept, ...added];
+            return [...updated, ...added];
           });
         }
         if (!silent) setError(null);

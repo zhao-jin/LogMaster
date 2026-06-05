@@ -241,6 +241,13 @@ export default function App() {
         hitIndex={search.index}
         onNextHit={() => search.next()}
         onPrevHit={() => search.prev()}
+        hasShowOnlyFilter={useAppStore.getState().rules.some((r) => r.filter === "in")}
+        onClearShowOnly={() => {
+          const { rules, updateRule } = useAppStore.getState();
+          for (const r of rules) {
+            if (r.filter === "in") updateRule(r.id, { filter: "none" });
+          }
+        }}
       />
       <TabBar />
       <div className="flex-1 flex min-h-0">

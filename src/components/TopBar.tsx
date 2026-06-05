@@ -20,7 +20,7 @@ import {
   Square,
   Copy as RestoreIcon,
   Trash2,
-  WholeWord,
+  Globe,
   WrapText,
   X,
   Zap,
@@ -65,6 +65,8 @@ interface Props {
   hitIndex: number;
   onPrevHit: () => void;
   onNextHit: () => void;
+  hasShowOnlyFilter: boolean;
+  onClearShowOnly: () => void;
 }
 
 export function TopBar({
@@ -79,6 +81,8 @@ export function TopBar({
   hitIndex,
   onPrevHit,
   onNextHit,
+  hasShowOnlyFilter,
+  onClearShowOnly,
 }: Props) {
   const {
     addTab,
@@ -376,6 +380,14 @@ export function TopBar({
 
       <IconBtn onClick={onToggleBookmarks} title="Bookmarks">
         <Bookmark className="w-4 h-4" />
+      </IconBtn>
+
+      <IconBtn
+        onClick={onClearShowOnly}
+        disabled={!hasShowOnlyFilter}
+        title="Show all lines — turn off every 'Show only' filter"
+      >
+        <Globe className="w-4 h-4" />
       </IconBtn>
 
       <IconBtn onClick={onToggleRules} title="Highlight & filter rules" label="Rules">
