@@ -593,9 +593,10 @@ function FolderTreeNode({
       }, [statusEpoch, expanded, load]);
 
   // Sort timer — full replace with re-sort by modified time.
+  // Use force=true so it's never blocked by an in-flight status refresh.
   useEffect(() => {
     if (!expanded || entries === null) return;
-    load(true, true);
+    load(true, true, true);
   }, [sortEpoch, expanded, load]);
 
   // Children files in display order — used as siblings for shift-range.
