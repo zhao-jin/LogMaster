@@ -21,6 +21,7 @@ import {
   Copy as RestoreIcon,
   Trash2,
   Globe,
+  WholeWord,
   WrapText,
   X,
   Zap,
