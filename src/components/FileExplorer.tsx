@@ -540,6 +540,10 @@ function FolderTreeNode({
   // Track if a refresh is already in flight to coalesce overlapping ticks.
   const inflight = useRef(false);
 
+  // NOTE: deliberately omit `entries` from deps — keep `load` stable so the
+  // status (5 s) and sort (configurable) timer effects fire only on their
+  // own epoch ticks, not whenever entries mutate. We use the functional
+  // setEntries(prev => ...) form to read the current value safely.
   const load = useCallback(
     async (silent = false, replace = false, force = false) => {
       if (inflight.current && !force) return;
@@ -550,23 +554,18 @@ function FolderTreeNode({
       }
       try {
         const es = await listDir(path);
-        if (replace || entries === null) {
-          // Full replace: re-sort by modified time.
-          setEntries(es);
-        } else {
-          // Merge: preserve order of existing entries, update metadata
-          // (size, modified time) from fresh API response.
-          setEntries((prev) => {
-            if (prev === null) return es;
-            const fresh = new Map(es.map((e) => [e.path, e]));
-            const prevPaths = new Set(prev.map((e) => e.path));
-            const updated = prev
-              .map((old) => fresh.get(old.path) ?? old)
-              .filter((e) => es.some((f) => f.path === e.path));
-            const added = es.filter((e) => !prevPaths.has(e.path));
-            return [...updated, ...added];
-          });
-        }
+        setEntries((prev) => {
+          // Full replace on initial load OR when caller asks to re-sort.
+          if (replace || prev === null) return es;
+          // Merge: preserve order; update metadata from fresh response.
+          const fresh = new Map(es.map((e) => [e.path, e]));
+          const prevPaths = new Set(prev.map((e) => e.path));
+          const updated = prev
+            .map((old) => fresh.get(old.path) ?? old)
+            .filter((e) => fresh.has(e.path));
+          const added = es.filter((e) => !prevPaths.has(e.path));
+          return [...updated, ...added];
+        });
         if (!silent) setError(null);
       } catch (e) {
         // Background refresh shouldn't replace good entries with an error.
@@ -576,7 +575,7 @@ function FolderTreeNode({
         if (!silent) setLoading(false);
       }
     },
-    [path, entries]
+    [path]
   );
 
   // Initial load on first expand (full replace).
