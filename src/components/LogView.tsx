@@ -434,9 +434,55 @@ export function LogView({
   // Stable handler — Row is memoized and we don't want to break that when
   // parent re-renders.
   const handleContextMenu = useCallback(
-    (t: LineMenuTarget) => setMenu(t),
+    (t: LineMenuTarget) => {
+      if (parentRef.current) {
+        const parentRect = parentRef.current.getBoundingClientRect();
+        const rowEl = parentRef.current.querySelector(`[data-index="${t.viewIdx}"]`);
+        if (rowEl) {
+          const rowRect = rowEl.getBoundingClientRect();
+          const viewportOffset = rowRect.top - parentRect.top;
+          setMenu({
+            ...t,
+            viewportOffset,
+          });
+          return;
+        }
+      }
+      setMenu(t);
+    },
     []
   );
+
+  const pendingScrollAlignmentRef = useRef<{ physLine: number; viewportOffset: number } | null>(null);
+
+  const handleShowAllLinesAtThis = useCallback((physLine: number, viewportOffset: number) => {
+    pendingScrollAlignmentRef.current = { physLine, viewportOffset };
+
+    const { rules, updateRule, updateTab, activeId } = useAppStore.getState();
+    for (const r of rules) {
+      if (r.filter === "in") {
+        updateRule(r.id, { filter: "none" });
+      }
+    }
+
+    if (activeId) {
+      updateTab(activeId, { tailing: false, followTail: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (pendingScrollAlignmentRef.current && visibleLines === null) {
+      const { physLine, viewportOffset } = pendingScrollAlignmentRef.current;
+      pendingScrollAlignmentRef.current = null;
+
+      virtualizer.scrollToIndex(physLine, { align: "start" });
+      requestAnimationFrame(() => {
+        if (parentRef.current) {
+          parentRef.current.scrollTop = Math.max(0, parentRef.current.scrollTop - viewportOffset);
+        }
+      });
+    }
+  }, [visibleLines, virtualizer]);
 
   return (
     <div
@@ -494,6 +540,7 @@ export function LogView({
         target={menu}
         onClose={() => setMenu(null)}
         onToggleBookmark={onToggleBookmark}
+        onShowAllLinesAtThis={handleShowAllLinesAtThis}
       />
     </div>
   );
@@ -571,6 +618,7 @@ const Row = memo(function Row({
           physLine: physIdx,
           text: text ?? "",
           isBookmarked,
+          viewIdx,
         });
       }}
     >

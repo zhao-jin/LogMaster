@@ -1,4 +1,4 @@
-import { Bookmark, Copy, Hash, X } from "lucide-react";
+import { Bookmark, Copy, Hash, X, Globe } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { cn } from "../lib/utils";
 
@@ -8,15 +8,18 @@ export interface LineMenuTarget {
   physLine: number;
   text: string;
   isBookmarked: boolean;
+  viewIdx: number;
+  viewportOffset?: number;
 }
 
 interface Props {
   target: LineMenuTarget | null;
   onClose: () => void;
   onToggleBookmark: (physLine: number) => void;
+  onShowAllLinesAtThis?: (physLine: number, viewportOffset: number) => void;
 }
 
-export function LineContextMenu({ target, onClose, onToggleBookmark }: Props) {
+export function LineContextMenu({ target, onClose, onToggleBookmark, onShowAllLinesAtThis }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -39,7 +42,7 @@ export function LineContextMenu({ target, onClose, onToggleBookmark }: Props) {
 
   // Clamp inside viewport
   const W = 220;
-  const H = 140;
+  const H = 180; // slightly taller to accommodate the new menu item
   const left = Math.min(target.x, window.innerWidth - W - 8);
   const top = Math.min(target.y, window.innerHeight - H - 8);
 
@@ -50,6 +53,21 @@ export function LineContextMenu({ target, onClose, onToggleBookmark }: Props) {
       style={{ left, top }}
       role="menu"
     >
+      {onShowAllLinesAtThis && target.viewportOffset !== undefined && (
+        <>
+          <Item
+            icon={<Globe className="w-4 h-4 text-brand" />}
+            onClick={() => {
+              onShowAllLinesAtThis(target.physLine, target.viewportOffset!);
+              onClose();
+            }}
+          >
+            Show All Lines At This
+          </Item>
+          <div className="my-1 h-px bg-border" />
+        </>
+      )}
+
       <Item
         icon={<Bookmark className="w-4 h-4" />}
         shortcut="Ctrl+F2"
