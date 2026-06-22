@@ -103,7 +103,7 @@ export function TopBar({
     setSearchWholeWord,
   } = useAppStore();
   const recent = useRecentStore();
-  const { fontSize, wordWrap, set: setSetting } = useSettingsStore();
+  const { fontSize, lineHeight, wordWrap, set: setSetting } = useSettingsStore();
 
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
@@ -382,7 +382,13 @@ export function TopBar({
       </ToggleBtn>
 
       <IconBtn
-        onClick={() => setSetting("fontSize", Math.max(10, fontSize - 1))}
+        onClick={() => {
+          const newFontSize = Math.max(10, fontSize - 1);
+          const ratio = fontSize > 0 ? lineHeight / fontSize : 1.43;
+          const newLineHeight = Math.max(14, Math.min(40, Math.round(newFontSize * ratio)));
+          setSetting("fontSize", newFontSize);
+          setSetting("lineHeight", newLineHeight);
+        }}
         disabled={fontSize <= 10}
         title={`Decrease font size (current: ${fontSize}px)`}
       >
@@ -390,7 +396,13 @@ export function TopBar({
       </IconBtn>
 
       <IconBtn
-        onClick={() => setSetting("fontSize", Math.min(24, fontSize + 1))}
+        onClick={() => {
+          const newFontSize = Math.min(24, fontSize + 1);
+          const ratio = fontSize > 0 ? lineHeight / fontSize : 1.43;
+          const newLineHeight = Math.max(14, Math.min(40, Math.round(newFontSize * ratio)));
+          setSetting("fontSize", newFontSize);
+          setSetting("lineHeight", newLineHeight);
+        }}
         disabled={fontSize >= 24}
         title={`Increase font size (current: ${fontSize}px)`}
       >
