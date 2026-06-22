@@ -1,5 +1,5 @@
 import { Bookmark, Copy, Hash, X, Globe } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 
 export interface LineMenuTarget {
@@ -38,19 +38,25 @@ export function LineContextMenu({ target, onClose, onToggleBookmark, onShowAllLi
     };
   }, [target, onClose]);
 
-  if (!target) return null;
+  const [coords, setCoords] = useState({ left: target?.x ?? 0, top: target?.y ?? 0 });
 
-  // Clamp inside viewport
-  const W = 220;
-  const H = 180; // slightly taller to accommodate the new menu item
-  const left = Math.min(target.x, window.innerWidth - W - 8);
-  const top = Math.min(target.y, window.innerHeight - H - 8);
+  useLayoutEffect(() => {
+    if (!target || !ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const w = rect.width || 220;
+    const h = rect.height || 140;
+    const l = Math.min(target.x, window.innerWidth - w - 8);
+    const t = Math.min(target.y, window.innerHeight - h - 8);
+    setCoords({ left: l, top: t });
+  }, [target]);
+
+  if (!target) return null;
 
   return (
     <div
       ref={ref}
       className="fixed z-[70] min-w-[220px] py-1 bg-bg-panel border border-border rounded-md shadow-2xl"
-      style={{ left, top }}
+      style={{ left: coords.left, top: coords.top }}
       role="menu"
     >
       {onShowAllLinesAtThis && target.viewportOffset !== undefined && (

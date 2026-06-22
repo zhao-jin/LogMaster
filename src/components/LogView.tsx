@@ -475,14 +475,22 @@ export function LogView({
       const { physLine, viewportOffset } = pendingScrollAlignmentRef.current;
       pendingScrollAlignmentRef.current = null;
 
-      virtualizer.scrollToIndex(physLine, { align: "start" });
-      requestAnimationFrame(() => {
-        if (parentRef.current) {
-          parentRef.current.scrollTop = Math.max(0, parentRef.current.scrollTop - viewportOffset);
-        }
-      });
+      if (parentRef.current) {
+        // Direct, non-clamping single scroll to the exact estimated location.
+        // Avoids browser clipping of incomplete scroll height in the early frames.
+        const targetScrollTop = Math.max(0, physLine * lineHeight - viewportOffset);
+        parentRef.current.scrollTop = targetScrollTop;
+
+        // Double-buffer protection against virtualizer re-layouts, resize updates, and late measurements.
+        requestAnimationFrame(() => {
+          if (parentRef.current) parentRef.current.scrollTop = targetScrollTop;
+          requestAnimationFrame(() => {
+            if (parentRef.current) parentRef.current.scrollTop = targetScrollTop;
+          });
+        });
+      }
     }
-  }, [visibleLines, virtualizer]);
+  }, [visibleLines, lineHeight]);
 
   return (
     <div
