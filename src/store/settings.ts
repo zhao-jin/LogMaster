@@ -32,9 +32,9 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
-  fontSize: 13,
+  fontSize: 14,
   lineHeight: 20,
-  fontFamily: "Consolas, 'Courier New', monospace",
+  fontFamily: "'JetBrains Mono Nerd Font Mono Medium', 'JetBrains Mono', Consolas, 'Courier New', monospace",
   tabSize: 4,
   followTailDefault: true,
   showLineNumbers: true,
