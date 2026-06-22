@@ -142,7 +142,8 @@ export function LogView({
   }, []);
 
   const fontSize = useSettingsStore((s) => s.fontSize);
-  const lineHeight = useSettingsStore((s) => s.lineHeight);
+  const lineHeightMultiplier = useSettingsStore((s) => s.lineHeight);
+  const lineHeight = Math.max(4, Math.round(fontSize * lineHeightMultiplier));
   const fontFamily = useSettingsStore((s) => s.fontFamily);
   const showLineNumbers = useSettingsStore((s) => s.showLineNumbers);
   const wordWrap = useSettingsStore((s) => s.wordWrap);

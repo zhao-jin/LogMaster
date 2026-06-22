@@ -33,7 +33,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   fontSize: 14,
-  lineHeight: 20,
+  lineHeight: 1.43,
   fontFamily: "'JetBrains Mono Nerd Font Mono Medium', 'JetBrains Mono', Consolas, 'Courier New', monospace",
   tabSize: 4,
   followTailDefault: true,
@@ -89,6 +89,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
         ) {
           migrated.fileStatusRefreshIntervalSec = migrated.folderRefreshIntervalSec;
           delete (migrated as any).folderRefreshIntervalSec;
+        }
+        // Migrate old absolute lineHeight (px) to multiplier (e.g., 20px -> 1.43x)
+        if (migrated.lineHeight !== undefined && migrated.lineHeight > 5) {
+          const fs = migrated.fontSize ?? DEFAULT_SETTINGS.fontSize;
+          migrated.lineHeight = Math.round((migrated.lineHeight / fs) * 100) / 100;
         }
         // Merge loaded settings with defaults (graceful migration)
         set({ ...DEFAULT_SETTINGS, ...migrated });

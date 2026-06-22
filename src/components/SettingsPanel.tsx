@@ -124,15 +124,15 @@ export function SettingsPanel({ open, onClose }: Props) {
             </Field>
             <Field
               label="Line height"
-              hint="Row height. Larger value gives more spacing."
+              hint="Row height multiplier, like in Word (0x to 3.0x)."
             >
               <NumberInput
                 value={s.lineHeight}
-                min={14}
-                max={40}
-                step={1}
+                min={0}
+                max={3.0}
+                step={0.05}
                 onChange={(v) => s.set("lineHeight", v)}
-                suffix="px"
+                suffix="x"
               />
             </Field>
             <Field

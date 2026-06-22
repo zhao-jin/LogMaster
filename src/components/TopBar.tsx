@@ -27,8 +27,6 @@ import {
   Zap,
   ZoomIn,
   ZoomOut,
-  FoldVertical,
-  UnfoldVertical,
 } from "lucide-react";
 import {
   Dropdown,
@@ -105,7 +103,7 @@ export function TopBar({
     setSearchWholeWord,
   } = useAppStore();
   const recent = useRecentStore();
-  const { fontSize, lineHeight, wordWrap, set: setSetting } = useSettingsStore();
+  const { fontSize, wordWrap, set: setSetting } = useSettingsStore();
 
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
@@ -384,13 +382,7 @@ export function TopBar({
       </ToggleBtn>
 
       <IconBtn
-        onClick={() => {
-          const newFontSize = Math.max(10, fontSize - 1);
-          const ratio = fontSize > 0 ? lineHeight / fontSize : 1.43;
-          const newLineHeight = Math.max(14, Math.min(40, Math.round(newFontSize * ratio)));
-          setSetting("fontSize", newFontSize);
-          setSetting("lineHeight", newLineHeight);
-        }}
+        onClick={() => setSetting("fontSize", Math.max(10, fontSize - 1))}
         disabled={fontSize <= 10}
         title={`Decrease font size (current: ${fontSize}px)`}
       >
@@ -398,33 +390,11 @@ export function TopBar({
       </IconBtn>
 
       <IconBtn
-        onClick={() => {
-          const newFontSize = Math.min(24, fontSize + 1);
-          const ratio = fontSize > 0 ? lineHeight / fontSize : 1.43;
-          const newLineHeight = Math.max(14, Math.min(40, Math.round(newFontSize * ratio)));
-          setSetting("fontSize", newFontSize);
-          setSetting("lineHeight", newLineHeight);
-        }}
+        onClick={() => setSetting("fontSize", Math.min(24, fontSize + 1))}
         disabled={fontSize >= 24}
         title={`Increase font size (current: ${fontSize}px)`}
       >
         <ZoomIn className="w-4 h-4" />
-      </IconBtn>
-
-      <IconBtn
-        onClick={() => setSetting("lineHeight", Math.max(14, lineHeight - 1))}
-        disabled={lineHeight <= 14}
-        title={`Decrease line height (current: ${lineHeight}px)`}
-      >
-        <FoldVertical className="w-4 h-4" />
-      </IconBtn>
-
-      <IconBtn
-        onClick={() => setSetting("lineHeight", Math.min(40, lineHeight + 1))}
-        disabled={lineHeight >= 40}
-        title={`Increase line height (current: ${lineHeight}px)`}
-      >
-        <UnfoldVertical className="w-4 h-4" />
       </IconBtn>
 
       <IconBtn onClick={onToggleBookmarks} title="Bookmarks">
