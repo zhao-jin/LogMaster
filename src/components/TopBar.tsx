@@ -27,6 +27,8 @@ import {
   Zap,
   ZoomIn,
   ZoomOut,
+  FoldVertical,
+  UnfoldVertical,
 } from "lucide-react";
 import {
   Dropdown,
@@ -407,6 +409,22 @@ export function TopBar({
         title={`Increase font size (current: ${fontSize}px)`}
       >
         <ZoomIn className="w-4 h-4" />
+      </IconBtn>
+
+      <IconBtn
+        onClick={() => setSetting("lineHeight", Math.max(14, lineHeight - 1))}
+        disabled={lineHeight <= 14}
+        title={`Decrease line height (current: ${lineHeight}px)`}
+      >
+        <FoldVertical className="w-4 h-4" />
+      </IconBtn>
+
+      <IconBtn
+        onClick={() => setSetting("lineHeight", Math.min(40, lineHeight + 1))}
+        disabled={lineHeight >= 40}
+        title={`Increase line height (current: ${lineHeight}px)`}
+      >
+        <UnfoldVertical className="w-4 h-4" />
       </IconBtn>
 
       <IconBtn onClick={onToggleBookmarks} title="Bookmarks">
