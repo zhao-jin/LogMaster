@@ -16,6 +16,7 @@ const PRESET_FONTS = [
   { label: "Fira Code", value: "'Fira Code', Consolas, monospace" },
   { label: "JetBrains Mono", value: "'JetBrains Mono', Consolas, monospace" },
   { label: "JetBrains Mono Nerd Font", value: "'JetBrains Mono Nerd Font Mono Medium', 'JetBrains Mono', Consolas, monospace" },
+  { label: "psudoFont Liga Mono", value: "'psudoFont Liga Mono', Consolas, monospace" },
   { label: "System Monospace", value: "monospace" },
 ];
 
