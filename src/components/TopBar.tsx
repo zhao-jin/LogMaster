@@ -25,6 +25,8 @@ import {
   WrapText,
   X,
   Zap,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   Dropdown,
@@ -101,7 +103,7 @@ export function TopBar({
     setSearchWholeWord,
   } = useAppStore();
   const recent = useRecentStore();
-  const { wordWrap, set: setSetting } = useSettingsStore();
+  const { fontSize, wordWrap, set: setSetting } = useSettingsStore();
 
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
@@ -378,6 +380,22 @@ export function TopBar({
       >
         <WrapText className="w-4 h-4" />
       </ToggleBtn>
+
+      <IconBtn
+        onClick={() => setSetting("fontSize", Math.max(10, fontSize - 1))}
+        disabled={fontSize <= 10}
+        title={`Decrease font size (current: ${fontSize}px)`}
+      >
+        <ZoomOut className="w-4 h-4" />
+      </IconBtn>
+
+      <IconBtn
+        onClick={() => setSetting("fontSize", Math.min(24, fontSize + 1))}
+        disabled={fontSize >= 24}
+        title={`Increase font size (current: ${fontSize}px)`}
+      >
+        <ZoomIn className="w-4 h-4" />
+      </IconBtn>
 
       <IconBtn onClick={onToggleBookmarks} title="Bookmarks">
         <Bookmark className="w-4 h-4" />
