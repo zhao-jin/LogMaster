@@ -7,6 +7,18 @@ interface Props {
   onClose: () => void;
 }
 
+const PRESET_FONTS = [
+  { label: "Consolas", value: "Consolas, 'Courier New', monospace" },
+  { label: "Courier New", value: "'Courier New', Courier, monospace" },
+  { label: "Lucida Console", value: "'Lucida Console', Monaco, monospace" },
+  { label: "Monaco", value: "Monaco, 'Courier New', monospace" },
+  { label: "Source Code Pro", value: "'Source Code Pro', Consolas, monospace" },
+  { label: "Fira Code", value: "'Fira Code', Consolas, monospace" },
+  { label: "JetBrains Mono", value: "'JetBrains Mono', Consolas, monospace" },
+  { label: "JetBrains Mono Nerd Font", value: "'JetBrains Mono Nerd Font Mono Medium', 'JetBrains Mono', Consolas, monospace" },
+  { label: "System Monospace", value: "monospace" },
+];
+
 export function SettingsPanel({ open, onClose }: Props) {
   const s = useSettingsStore();
 
@@ -20,6 +32,8 @@ export function SettingsPanel({ open, onClose }: Props) {
   }, [open, onClose]);
 
   if (!open) return null;
+
+  const isPreset = PRESET_FONTS.some((f) => f.value === s.fontFamily);
 
   return (
     <div
@@ -65,19 +79,37 @@ export function SettingsPanel({ open, onClose }: Props) {
               </div>
             </Field>
             <Field label="Font family" hint="Editor font family (monospace recommended).">
-              <select
-                className="input"
-                value={s.fontFamily}
-                onChange={(e) => s.set("fontFamily", e.target.value)}
-              >
-                <option value="Consolas, 'Courier New', monospace">Consolas</option>
-                <option value="'Courier New', Courier, monospace">Courier New</option>
-                <option value="'Lucida Console', Monaco, monospace">Lucida Console</option>
-                <option value="Monaco, 'Courier New', monospace">Monaco</option>
-                <option value="'Source Code Pro', Consolas, monospace">Source Code Pro</option>
-                <option value="'Fira Code', Consolas, monospace">Fira Code</option>
-                <option value="monospace">System Monospace</option>
-              </select>
+              <div className="space-y-2">
+                <select
+                  className="input w-full"
+                  value={isPreset ? s.fontFamily : "custom"}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "custom") {
+                      s.set("fontFamily", "JetBrains Mono");
+                    } else {
+                      s.set("fontFamily", val);
+                    }
+                  }}
+                >
+                  {PRESET_FONTS.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                  <option value="custom">Custom Font...</option>
+                </select>
+
+                {!isPreset && (
+                  <input
+                    type="text"
+                    className="input w-full mt-2 font-mono text-xs"
+                    placeholder="Enter custom CSS font-family (e.g. 'JetBrains Mono', monospace)"
+                    value={s.fontFamily}
+                    onChange={(e) => s.set("fontFamily", e.target.value)}
+                  />
+                )}
+              </div>
             </Field>
             <Field label="Font size" hint="Editor font size in pixels.">
               <NumberInput
