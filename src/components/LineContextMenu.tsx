@@ -1,5 +1,5 @@
 import { Bookmark, Copy, Hash, X, Globe } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "../lib/utils";
 
 export interface LineMenuTarget {
@@ -38,25 +38,20 @@ export function LineContextMenu({ target, onClose, onToggleBookmark, onShowAllLi
     };
   }, [target, onClose]);
 
-  const [coords, setCoords] = useState({ left: target?.x ?? 0, top: target?.y ?? 0 });
-
-  useLayoutEffect(() => {
-    if (!target || !ref.current) return;
-    const rect = ref.current.getBoundingClientRect();
-    const w = rect.width || 220;
-    const h = rect.height || 140;
-    const l = Math.min(target.x, window.innerWidth - w - 8);
-    const t = Math.min(target.y, window.innerHeight - h - 8);
-    setCoords({ left: l, top: t });
-  }, [target]);
-
   if (!target) return null;
+
+  const showShowAll = onShowAllLinesAtThis && target.viewportOffset !== undefined;
+  const W = 220;
+  // Precise height calculation based on available actions to avoid push-away distance
+  const H = showShowAll ? 180 : 140;
+  const left = Math.min(target.x, window.innerWidth - W - 8);
+  const top = Math.min(target.y, window.innerHeight - H - 8);
 
   return (
     <div
       ref={ref}
       className="fixed z-[70] min-w-[220px] py-1 bg-bg-panel border border-border rounded-md shadow-2xl"
-      style={{ left: coords.left, top: coords.top }}
+      style={{ left, top }}
       role="menu"
     >
       {onShowAllLinesAtThis && target.viewportOffset !== undefined && (
