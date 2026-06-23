@@ -121,7 +121,7 @@ export function RulesPanel({ open, onClose }: Props) {
           <button className="btn" onClick={() => handleAdd()} title="Add rule">
             <Plus className="w-4 h-4" />
           </button>
-          <button className="btn" onClick={onClose} title="Close panel (Ctrl+N)">
+          <button className="btn" onClick={onClose} title="Toggle panel (Ctrl+N)">
             <X className="w-4 h-4" />
           </button>
         </div>

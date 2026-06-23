@@ -40,6 +40,13 @@ export default function App() {
   const active = tabs.find((t) => t.id === activeId);
 
   const [side, setSide] = useState<SidePanel>(null);
+  const lastActiveSideRef = useRef<SidePanel>("rules");
+
+  useEffect(() => {
+    if (side !== null) {
+      lastActiveSideRef.current = side;
+    }
+  }, [side]);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [gotoLineOpen, setGotoLineOpen] = useState(false);
@@ -141,7 +148,7 @@ export default function App() {
         setCmdOpen(true);
       } else if (mod && e.key.toLowerCase() === "n") {
         e.preventDefault();
-        setSide(null);
+        setSide((v) => (v !== null ? null : (lastActiveSideRef.current ?? "rules")));
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleLeft();
