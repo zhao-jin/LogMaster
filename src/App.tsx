@@ -124,11 +124,11 @@ export default function App() {
     function onKey(e: KeyboardEvent) {
       const mod = e.ctrlKey || e.metaKey;
 
-      // Block WebView's built-in Ctrl+F / Ctrl+P / Ctrl+G page-find UI.
+      // Block WebView's built-in Ctrl+F / Ctrl+P / Ctrl+G page-find UI / Ctrl+N new window.
       if (
         mod &&
         !e.altKey &&
-        ["f", "g", "p", "b"].includes(e.key.toLowerCase())
+        ["f", "g", "p", "b", "n"].includes(e.key.toLowerCase())
       ) {
         if (!(e.shiftKey && e.key.toLowerCase() === "p")) {
           e.preventDefault();
@@ -139,6 +139,9 @@ export default function App() {
       if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setCmdOpen(true);
+      } else if (mod && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setSide(null);
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleLeft();
@@ -221,6 +224,7 @@ export default function App() {
     searchWholeWord,
     setSearchWholeWord,
     toggleLeft,
+    setSide,
   ]);
 
   return (

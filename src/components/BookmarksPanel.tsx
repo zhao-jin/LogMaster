@@ -60,7 +60,7 @@ export function BookmarksPanel({ open, onClose, onJump }: Props) {
           >
             <Trash2 className="w-4 h-4" />
           </button>
-          <button className="btn" onClick={onClose}>
+          <button className="btn" onClick={onClose} title="Close panel (Ctrl+N)">
             <X className="w-4 h-4" />
           </button>
         </div>
