@@ -55,6 +55,7 @@ interface AppState {
   addRule: (r: Rule) => void;
   updateRule: (id: string, patch: Partial<Rule>) => void;
   removeRule: (id: string) => void;
+  setRules: (rules: Rule[]) => void;
 
   toggleBookmark: (tabId: string, physLine: number) => void;
   renameBookmark: (tabId: string, bookmarkId: string, name: string) => void;
@@ -136,6 +137,7 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   removeRule: (id) =>
     set((s) => ({ rules: s.rules.filter((r) => r.id !== id) })),
+  setRules: (rules) => set({ rules: rules.map(normalizeRule) }),
 
   toggleBookmark: (tabId, physLine) =>
     set((s) => ({

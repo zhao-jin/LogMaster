@@ -11,11 +11,12 @@ import {
   History,
   ChevronDown,
   Globe,
+  Save,
 } from "lucide-react";
 import { useAppStore } from "../store/app";
 import type { Rule } from "../lib/ipc";
 import { cn } from "../lib/utils";
-import { useRuleLibrary, type RuleTemplate } from "../store/ruleLibrary";
+import { useRuleLibrary, type RuleTemplate, type SavedRuleset } from "../store/ruleLibrary";
 
 interface Props {
   open: boolean;
@@ -28,11 +29,29 @@ export function RulesPanel({ open, onClose }: Props) {
     addRule,
     updateRule,
     removeRule,
+    setRules,
     setFilterEnabled,
     filterCombineMode,
     setFilterCombineMode,
   } = useAppStore();
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const saveRuleset = useRuleLibrary((s) => s.saveRuleset);
+
+  function handleSaveRuleset() {
+    if (rules.length === 0) {
+      alert("No rules to save!");
+      return;
+    }
+    const currentCount = useRuleLibrary.getState().savedRulesets?.length || 0;
+    const name = prompt(
+      "Enter a name for this ruleset combination:",
+      `Ruleset ${currentCount + 1}`
+    );
+    if (name === null) return; // cancelled
+
+    saveRuleset(name, rules);
+    setLibraryOpen(true); // Auto expand library panel so user can see it
+  }
 
   if (!open) return null;
 
@@ -118,6 +137,17 @@ export function RulesPanel({ open, onClose }: Props) {
               )}
             />
           </button>
+          <button
+            className={cn(
+              "btn text-fg-subtle",
+              rules.length > 0 && "hover:text-brand"
+            )}
+            onClick={handleSaveRuleset}
+            disabled={rules.length === 0}
+            title="Save current rules combination as a ruleset"
+          >
+            <Save className="w-4 h-4" />
+          </button>
           <button className="btn" onClick={() => handleAdd()} title="Add rule">
             <Plus className="w-4 h-4" />
           </button>
@@ -176,14 +206,18 @@ function LibraryDrawer({
 }) {
   const favorites = useRuleLibrary((s) => s.favorites);
   const history = useRuleLibrary((s) => s.history);
+  const savedRulesets = useRuleLibrary((s) => s.savedRulesets || []);
   const removeFav = useRuleLibrary((s) => s.removeFavorite);
   const removeHist = useRuleLibrary((s) => s.removeHistory);
   const renameFav = useRuleLibrary((s) => s.renameFavorite);
   const clearHistory = useRuleLibrary((s) => s.clearHistory);
   const toggleFav = useRuleLibrary((s) => s.toggleFavorite);
-  const [tab, setTab] = useState<"fav" | "hist">("fav");
+  const removeRuleset = useRuleLibrary((s) => s.removeRuleset);
+  const renameRuleset = useRuleLibrary((s) => s.renameRuleset);
 
-  const list = tab === "fav" ? favorites : history;
+  const setRules = useAppStore((s) => s.setRules);
+
+  const [tab, setTab] = useState<"fav" | "hist" | "saved">("fav");
 
   return (
     <div className="border-b border-border bg-bg/40">
@@ -201,6 +235,21 @@ function LibraryDrawer({
           Favorites
           <span className="text-fg-subtle tabular-nums">
             ({favorites.length})
+          </span>
+        </button>
+        <button
+          onClick={() => setTab("saved")}
+          className={cn(
+            "px-2 py-1 rounded flex items-center gap-1 cursor-pointer ml-1",
+            tab === "saved"
+              ? "bg-brand/15 text-brand"
+              : "text-fg-muted hover:text-fg hover:bg-bg-hover"
+          )}
+        >
+          <Save className="w-3 h-3" />
+          Saved
+          <span className="text-fg-subtle tabular-nums">
+            ({savedRulesets.length})
           </span>
         </button>
         <button
@@ -231,35 +280,131 @@ function LibraryDrawer({
       </div>
 
       <div className="max-h-48 overflow-auto py-1">
-        {list.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-fg-subtle text-center">
-            {tab === "fav"
-              ? "No favorites yet. Click ★ on any rule to save it here."
-              : "No history yet. Recently-edited patterns appear here."}
-          </div>
+        {tab === "saved" ? (
+          savedRulesets.length === 0 ? (
+            <div className="px-3 py-4 text-xs text-fg-subtle text-center">
+              No saved rulesets yet. Click the 💾 save icon above to store current rules.
+            </div>
+          ) : (
+            savedRulesets.map((r) => (
+              <SavedRulesetRow
+                key={r.id}
+                entry={r}
+                onUse={() => {
+                  setRules(r.rules);
+                  _onClose();
+                }}
+                onRename={(name) => renameRuleset(r.id, name)}
+                onDelete={() => {
+                  if (confirm(`Delete ruleset "${r.name}"?`)) {
+                    removeRuleset(r.id);
+                  }
+                }}
+              />
+            ))
+          )
         ) : (
-          list.map((t) => (
-            <LibraryRow
-              key={t.id}
-              entry={t}
-              isFav={tab === "fav"}
-              onPick={() => onPick(t)}
-              onPromoteToFav={() => {
-                toggleFav(t);
-                setTab("fav");
-              }}
-              onRename={
-                tab === "fav"
-                  ? (name) => renameFav(t.id, name)
-                  : undefined
-              }
-              onDelete={() =>
-                tab === "fav" ? removeFav(t.id) : removeHist(t.id)
-              }
-            />
-          ))
+          (tab === "fav" ? favorites : history).length === 0 ? (
+            <div className="px-3 py-4 text-xs text-fg-subtle text-center">
+              {tab === "fav"
+                ? "No favorites yet. Click ★ on any rule to save it here."
+                : "No history yet. Recently-edited patterns appear here."}
+            </div>
+          ) : (
+            (tab === "fav" ? favorites : history).map((t) => (
+              <LibraryRow
+                key={t.id}
+                entry={t}
+                isFav={tab === "fav"}
+                onPick={() => onPick(t)}
+                onPromoteToFav={() => {
+                  toggleFav(t);
+                  setTab("fav");
+                }}
+                onRename={
+                  tab === "fav"
+                    ? (name) => renameFav(t.id, name)
+                    : undefined
+                }
+                onDelete={() =>
+                  tab === "fav" ? removeFav(t.id) : removeHist(t.id)
+                }
+              />
+            ))
+          )
         )}
       </div>
+    </div>
+  );
+}
+
+function SavedRulesetRow({
+  entry,
+  onUse,
+  onRename,
+  onDelete,
+}: {
+  entry: SavedRuleset;
+  onUse: () => void;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.name);
+
+  return (
+    <div className="group flex items-center gap-1.5 px-2 py-1 hover:bg-bg-hover/60">
+      <Globe className="shrink-0 w-3.5 h-3.5 text-brand" />
+
+      <div className="w-[140px] shrink-0 text-xs">
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => {
+              if (draft.trim()) onRename(draft.trim());
+              setEditing(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                setDraft(entry.name);
+                setEditing(false);
+              }
+            }}
+            className="input w-full text-xs px-1 py-0.5"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => (setDraft(entry.name), setEditing(true))}
+            className="text-left truncate w-full text-fg hover:underline cursor-text font-medium"
+            title="Click to rename"
+          >
+            {entry.name || "(unnamed)"}
+          </button>
+        )}
+      </div>
+
+      <span className="flex-1 text-[11px] text-fg-subtle">
+        {entry.rules.length} {entry.rules.length === 1 ? "rule" : "rules"}
+      </span>
+
+      <button
+        onClick={onUse}
+        title="Apply this ruleset"
+        className="shrink-0 px-1.5 py-0.5 text-xs rounded text-brand hover:bg-brand/15 cursor-pointer font-medium"
+      >
+        Use
+      </button>
+      <button
+        onClick={onDelete}
+        title="Delete ruleset"
+        className="shrink-0 p-1 rounded text-fg-subtle hover:text-danger hover:bg-bg-hover cursor-pointer opacity-0 group-hover:opacity-100"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }

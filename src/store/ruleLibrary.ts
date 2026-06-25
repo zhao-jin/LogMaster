@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import type { Rule } from "../lib/ipc";
 
 /**
  * A reusable Rule template — pattern + flags + colors. We deliberately do
@@ -19,11 +20,20 @@ export interface RuleTemplate {
   updatedAt: number;
 }
 
+export interface SavedRuleset {
+  id: string;
+  name: string;
+  rules: Rule[];
+  updatedAt: number;
+}
+
 interface State {
   /** Auto-recorded history of recently-used patterns (LRU, deduped). */
   history: RuleTemplate[];
   /** User-curated favorites — never auto-evicted. */
   favorites: RuleTemplate[];
+  /** Saved rule combinations (snapshots) */
+  savedRulesets: SavedRuleset[];
 
   /**
    * Record a pattern usage in history. Deduped on (pattern, is_regex,
@@ -40,6 +50,10 @@ interface State {
   removeHistory: (id: string) => void;
   renameFavorite: (id: string, name: string) => void;
   clearHistory: () => void;
+
+  saveRuleset: (name: string, rules: Rule[]) => void;
+  removeRuleset: (id: string) => void;
+  renameRuleset: (id: string, name: string) => void;
 }
 
 const HISTORY_MAX = 50;
@@ -64,6 +78,7 @@ export const useRuleLibrary = create<State>()(
     (set, get) => ({
       history: [],
       favorites: [],
+      savedRulesets: [],
 
       recordHistory: (t) => {
         // Skip empty patterns — they're never useful to recall.
@@ -116,6 +131,31 @@ export const useRuleLibrary = create<State>()(
         })),
 
       clearHistory: () => set({ history: [] }),
+
+      saveRuleset: (name, rules) => {
+        // Deep clone the rules and strip transient ID if needed (or keep for stability)
+        const entry: SavedRuleset = {
+          id: newId("sset"),
+          name: name.trim() || `Ruleset ${(get().savedRulesets || []).length + 1}`,
+          rules: JSON.parse(JSON.stringify(rules)),
+          updatedAt: Date.now(),
+        };
+        set((s) => ({
+          savedRulesets: [entry, ...(s.savedRulesets || [])],
+        }));
+      },
+
+      removeRuleset: (id) =>
+        set((s) => ({
+          savedRulesets: (s.savedRulesets || []).filter((r) => r.id !== id),
+        })),
+
+      renameRuleset: (id, name) =>
+        set((s) => ({
+          savedRulesets: (s.savedRulesets || []).map((r) =>
+            r.id === id ? { ...r, name, updatedAt: Date.now() } : r
+          ),
+        })),
     }),
     {
       name: "logmaster:rule-library",
