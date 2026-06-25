@@ -29,7 +29,6 @@ export function RulesPanel({ open, onClose }: Props) {
     addRule,
     updateRule,
     removeRule,
-    setRules,
     setFilterEnabled,
     filterCombineMode,
     setFilterCombineMode,
