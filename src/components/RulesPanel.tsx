@@ -246,7 +246,7 @@ function LibraryDrawer({
           )}
         >
           <Save className="w-3 h-3" />
-          Saved
+          Ruleset
           <span className="text-fg-subtle tabular-nums">
             ({savedRulesets.length})
           </span>
