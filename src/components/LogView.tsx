@@ -372,14 +372,36 @@ export function LogView({
   // immediately without waiting for an async scroll event.
   const reportScroll = useRef<() => void>(() => {});
   reportScroll.current = () => {
+    const el = parentRef.current;
+    if (!el) return;
     const its = virtualizer.getVirtualItems();
-    if (its.length > 0) {
-      const first = its[0].index + baseOffset;
-      const last = its[its.length - 1].index + baseOffset;
-      const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
-      const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
-      useAppStore.getState().setScrollPosition(topPhys, botPhys);
+    if (its.length === 0) return;
+
+    // getVirtualItems() includes the overscan buffer, so its first/last
+    // index is NOT what's actually on screen. Derive the truly-visible
+    // cropped index range from the scroll geometry instead.
+    const top = el.scrollTop;
+    const bottom = top + el.clientHeight;
+    let firstCropped: number;
+    let lastCropped: number;
+    if (wordWrap) {
+      // Variable row heights — keep only items whose box intersects the viewport.
+      const visible = its.filter((vi) => vi.start < bottom && vi.start + vi.size > top);
+      const pool = visible.length > 0 ? visible : its;
+      firstCropped = pool[0].index;
+      lastCropped = pool[pool.length - 1].index;
+    } else {
+      // Fixed row height — exact arithmetic.
+      firstCropped = Math.floor(top / lineHeight);
+      lastCropped = Math.max(firstCropped, Math.ceil(bottom / lineHeight) - 1);
+      lastCropped = Math.min(lastCropped, totalRows - 1);
     }
+
+    const first = firstCropped + baseOffset;
+    const last = lastCropped + baseOffset;
+    const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
+    const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
+    useAppStore.getState().setScrollPosition(topPhys, botPhys);
   };
 
   useEffect(() => {
