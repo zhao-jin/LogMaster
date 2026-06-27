@@ -259,18 +259,17 @@ export default function App() {
             if (r.filter === "in") updateRule(r.id, { filter: "none" });
           }
         }}
-        hasBaseLine={(active?.baseLine ?? 0) > 0}
+        baseLine={active?.baseLine ?? 0}
         onClearView={() => {
           if (!active) return;
-          if ((active.baseLine ?? 0) > 0) {
-            // Already cleared — restore the full view from file top.
-            updateTab(active.id, { baseLine: 0 });
-          } else {
-            // Use the line just after the current bottom-most visible line
-            // as the new view base (everything above it is hidden).
-            const { scrollBottomLine } = useAppStore.getState();
-            updateTab(active.id, { baseLine: scrollBottomLine + 1 });
-          }
+          // Cumulative: each click hides everything up to & including the
+          // current bottom-most visible line, advancing the base by ~one page.
+          const { scrollBottomLine } = useAppStore.getState();
+          updateTab(active.id, { baseLine: scrollBottomLine + 1 });
+        }}
+        onResetView={() => {
+          if (!active) return;
+          updateTab(active.id, { baseLine: 0 });
         }}
       />
       <TabBar />

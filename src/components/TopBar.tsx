@@ -28,6 +28,7 @@ import {
   ZoomIn,
   ZoomOut,
   Eraser,
+  RotateCcw,
 } from "lucide-react";
 import {
   Dropdown,
@@ -71,8 +72,9 @@ interface Props {
   onNextHit: () => void;
   hasShowOnlyFilter: boolean;
   onClearShowOnly: () => void;
-  hasBaseLine: boolean;
+  baseLine: number;
   onClearView: () => void;
+  onResetView: () => void;
 }
 
 export function TopBar({
@@ -89,8 +91,9 @@ export function TopBar({
   onNextHit,
   hasShowOnlyFilter,
   onClearShowOnly,
-  hasBaseLine,
+  baseLine,
   onClearView,
+  onResetView,
 }: Props) {
   const {
     addTab,
@@ -362,19 +365,28 @@ export function TopBar({
 
       <Sep />
 
-      <ToggleBtn
-        active={hasBaseLine}
+      <IconBtn
         onClick={onClearView}
         disabled={!active}
-        title={
-          hasBaseLine
-            ? "View cleared — click to restore from file top"
-            : "Clear view — hide everything above the last visible line"
-        }
+        title="Clear view — hide everything up to the last visible line (cumulative, ~one page per click)"
         label="Clear"
       >
         <Eraser className="w-4 h-4" />
-      </ToggleBtn>
+      </IconBtn>
+
+      <IconBtn
+        onClick={onResetView}
+        disabled={!active || baseLine <= 0}
+        title={
+          baseLine > 0
+            ? `Reset view to file top (current base line: ${baseLine + 1})`
+            : "Reset view to file top (not cleared)"
+        }
+        label="Reset"
+      >
+        <RotateCcw className="w-4 h-4" />
+      </IconBtn>
+
 
       <ToggleBtn
         active={!!active?.tailing}

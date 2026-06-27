@@ -408,6 +408,27 @@ export function LogView({
     prefetchVisible.current();
   }, [fileId, totalRows, visibleLines, baseOffset]);
 
+  // React to view-base changes (Clear / Reset):
+  //  - Clear (base moves DOWN): snap to top so the new range starts clean.
+  //  - Reset (base moves UP, e.g. to 0): keep the currently visible physical
+  //    lines fixed on screen by compensating scrollTop for the index shift,
+  //    so line numbers don't appear to jump.
+  const prevBaseOffsetRef = useRef(baseOffset);
+  useEffect(() => {
+    const prev = prevBaseOffsetRef.current;
+    if (prev === baseOffset) return;
+    prevBaseOffsetRef.current = baseOffset;
+    const el = parentRef.current;
+    if (!el) return;
+    if (baseOffset > prev) {
+      el.scrollTop = 0;
+    } else {
+      // Rows above were revealed; shift down by the recovered offset so the
+      // same content stays put visually.
+      el.scrollTop = el.scrollTop + (prev - baseOffset) * lineHeight;
+    }
+  }, [baseOffset, lineHeight]);
+
   useEffect(() => {
     if (!followTail || totalRows === 0) return;
     virtualizer.scrollToIndex(totalRows - 1, { align: "end" });
