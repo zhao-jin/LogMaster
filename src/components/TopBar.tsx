@@ -27,6 +27,7 @@ import {
   Zap,
   ZoomIn,
   ZoomOut,
+  Eraser,
 } from "lucide-react";
 import {
   Dropdown,
@@ -70,6 +71,8 @@ interface Props {
   onNextHit: () => void;
   hasShowOnlyFilter: boolean;
   onClearShowOnly: () => void;
+  hasBaseLine: boolean;
+  onClearView: () => void;
 }
 
 export function TopBar({
@@ -86,6 +89,8 @@ export function TopBar({
   onNextHit,
   hasShowOnlyFilter,
   onClearShowOnly,
+  hasBaseLine,
+  onClearView,
 }: Props) {
   const {
     addTab,
@@ -356,6 +361,20 @@ export function TopBar({
       </div>
 
       <Sep />
+
+      <ToggleBtn
+        active={hasBaseLine}
+        onClick={onClearView}
+        disabled={!active}
+        title={
+          hasBaseLine
+            ? "View cleared — click to restore from file top"
+            : "Clear view — hide everything above the last visible line"
+        }
+        label="Clear"
+      >
+        <Eraser className="w-4 h-4" />
+      </ToggleBtn>
 
       <ToggleBtn
         active={!!active?.tailing}

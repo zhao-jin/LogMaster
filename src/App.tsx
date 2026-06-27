@@ -259,6 +259,19 @@ export default function App() {
             if (r.filter === "in") updateRule(r.id, { filter: "none" });
           }
         }}
+        hasBaseLine={(active?.baseLine ?? 0) > 0}
+        onClearView={() => {
+          if (!active) return;
+          if ((active.baseLine ?? 0) > 0) {
+            // Already cleared — restore the full view from file top.
+            updateTab(active.id, { baseLine: 0 });
+          } else {
+            // Use the line just after the current bottom-most visible line
+            // as the new view base (everything above it is hidden).
+            const { scrollBottomLine } = useAppStore.getState();
+            updateTab(active.id, { baseLine: scrollBottomLine + 1 });
+          }
+        }}
       />
       <TabBar />
       <div className="flex-1 flex min-h-0">
@@ -279,6 +292,7 @@ export default function App() {
               scrollTo={active.scrollTo}
               onScrollDone={() => setScrollTo(active.id, null)}
               currentSearchHit={search.current}
+              baseLine={active.baseLine}
             />
           ) : (
             <Welcome />

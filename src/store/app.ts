@@ -19,6 +19,8 @@ export interface Tab extends FileInfo {
   bookmarkCounter: number;
   /** Current target physical line (used for scrollToLine). */
   scrollTo: number | null;
+  /** View base physical line — lines before this are hidden. 0 = file top. */
+  baseLine: number;
 }
 
 interface AppState {
@@ -93,6 +95,7 @@ export const useAppStore = create<AppState>((set) => ({
             bookmarks: [],
             bookmarkCounter: 0,
             scrollTo: null,
+            baseLine: 0,
           },
         ],
         activeId: t.id,

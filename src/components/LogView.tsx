@@ -74,6 +74,8 @@ interface Props {
   scrollTo: number | null;
   onScrollDone: () => void;
   currentSearchHit?: { line: number; col_start: number; col_end: number };
+  /** View base physical line — rows before this are hidden. 0 = file top. */
+  baseLine?: number;
 }
 
 export function LogView({
@@ -86,6 +88,7 @@ export function LogView({
   scrollTo,
   onScrollDone,
   currentSearchHit,
+  baseLine = 0,
 }: Props) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [, force] = useState(0);
@@ -155,7 +158,20 @@ export function LogView({
     [allRules]
   );
 
-  const totalRows = visibleLines ? visibleLines.length : lineCount;
+  // realTotalRows = rows in the underlying view space (post-filter, pre-baseLine crop).
+  const realTotalRows = visibleLines ? visibleLines.length : lineCount;
+  // baseOffset = where the cropped view starts within the real view space.
+  // No filter: physical line == view line, so offset is baseLine directly.
+  // Filtered: find the first visible entry whose physical line >= baseLine.
+  const baseOffset = useMemo(() => {
+    if (baseLine <= 0) return 0;
+    if (!visibleLines) return Math.min(baseLine, lineCount);
+    let i = binarySearch(visibleLines, baseLine);
+    if (i < 0) i = -i - 1;
+    return Math.min(i, visibleLines.length);
+  }, [baseLine, visibleLines, lineCount]);
+  // Virtual list only renders rows from baseOffset onward.
+  const totalRows = Math.max(0, realTotalRows - baseOffset);
 
   // Cache invalidation strategy
   // ---------------------------
@@ -204,6 +220,7 @@ export function LogView({
     len: number;
     first: number;
     mid: number;
+    baseOffset: number;
   } | null>(null);
   useEffect(() => {
     const cache = getCache(fileId);
@@ -217,6 +234,9 @@ export function LogView({
 
     const prev = lastSnapshotRef.current;
     const fileChanged = !prev || prev.fileId !== fileId;
+    // baseOffset shifts the cropped index→content mapping, so the chunk
+    // cache (keyed in cropped space) must be fully rebuilt when it changes.
+    const baseChanged = !prev || prev.baseOffset !== baseOffset;
     const filterModeChanged =
       !prev || prev.hasFilter !== hasFilter || prev.filterSig !== filterSig;
     const prefixChanged =
@@ -230,7 +250,7 @@ export function LogView({
         (prev.len > 0 && first !== prev.first) ||
         (prev.len > 0 && midIdx === Math.floor(prev.len / 2) && mid !== prev.mid));
 
-    if (fileChanged || filterModeChanged || prefixChanged) {
+    if (fileChanged || filterModeChanged || prefixChanged || baseChanged) {
       cache.clear();
     } else if (prev && len > prev.len) {
       // Pure append (no projection rewrite). Two chunks may now be stale:
@@ -249,14 +269,14 @@ export function LogView({
       cache.delete(lastChunk);
     }
 
-    lastSnapshotRef.current = { fileId, filterSig, hasFilter, len, first, mid };
+    lastSnapshotRef.current = { fileId, filterSig, hasFilter, len, first, mid, baseOffset };
 
     // After eviction the boundary chunk is missing; kick off a refetch
     // on the next frame so it doesn't stay as a ghost row. We always do
     // this on append, since prefetch is cheap (cache.has guard skips
     // already-present chunks).
     requestAnimationFrame(() => prefetchVisible.current());
-  }, [fileId, lineCount, visibleLines, filterSig]);
+  }, [fileId, lineCount, visibleLines, filterSig, baseOffset]);
 
   const virtualizer = useVirtualizer({
     count: totalRows,
@@ -320,10 +340,10 @@ export function LogView({
           let lines: string[];
           if (visibleLines) {
             const ids: number[] = new Array(endV - startV);
-            for (let i = startV; i < endV; i++) ids[i - startV] = visibleLines[i];
+            for (let i = startV; i < endV; i++) ids[i - startV] = visibleLines[i + baseOffset];
             lines = await readLinesByIndices(fileId, ids);
           } else {
-            const r = await readLines(fileId, startV, endV);
+            const r = await readLines(fileId, startV + baseOffset, endV + baseOffset);
             lines = r.lines;
           }
           touchAndCache(fileId, c, lines);
@@ -353,8 +373,8 @@ export function LogView({
     function onScroll() {
       const its = virtualizer.getVirtualItems();
       if (its.length > 0) {
-        const first = its[0].index;
-        const last = its[its.length - 1].index;
+        const first = its[0].index + baseOffset;
+        const last = its[its.length - 1].index + baseOffset;
         const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
         const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
         useAppStore.getState().setScrollPosition(topPhys, botPhys);
@@ -381,12 +401,12 @@ export function LogView({
       el.removeEventListener("scroll", onScroll);
       ro.disconnect();
     };
-  }, [virtualizer, visibleLines, wordWrap]);
+  }, [virtualizer, visibleLines, wordWrap, baseOffset]);
 
   const items = virtualizer.getVirtualItems();
   useEffect(() => {
     prefetchVisible.current();
-  }, [fileId, totalRows, visibleLines]);
+  }, [fileId, totalRows, visibleLines, baseOffset]);
 
   useEffect(() => {
     if (!followTail || totalRows === 0) return;
@@ -408,9 +428,11 @@ export function LogView({
     } else {
       viewIdx = scrollTo;
     }
-    virtualizer.scrollToIndex(viewIdx, { align: "center" });
+    // Translate to cropped index space.
+    const croppedIdx = Math.max(0, viewIdx - baseOffset);
+    virtualizer.scrollToIndex(croppedIdx, { align: "center" });
     onScrollDone();
-  }, [scrollTo, visibleLines, virtualizer, onScrollDone]);
+  }, [scrollTo, visibleLines, virtualizer, onScrollDone, baseOffset]);
 
   const compiledRules = useMemo(() => {
     return rules.map((r) => {
@@ -511,7 +533,10 @@ export function LogView({
       >
         {items.map((vi) => {
           const viewIdx = vi.index;
-          const physIdx = visibleLines ? visibleLines[viewIdx] : viewIdx;
+          // realViewIdx maps the cropped virtual index back to the underlying
+          // view space (post-filter), then to a physical line.
+          const realViewIdx = viewIdx + baseOffset;
+          const physIdx = visibleLines ? visibleLines[realViewIdx] : realViewIdx;
           const chunkIdx = Math.floor(viewIdx / CHUNK);
           const inner = viewIdx % CHUNK;
           const cache = getCache(fileId);
