@@ -367,18 +367,26 @@ export function LogView({
       prefetchVisible.current();
     });
   }
+  // Report the current top/bottom visible physical lines to the store.
+  // Kept in a ref so other effects (e.g. Clear snap-to-top) can re-report
+  // immediately without waiting for an async scroll event.
+  const reportScroll = useRef<() => void>(() => {});
+  reportScroll.current = () => {
+    const its = virtualizer.getVirtualItems();
+    if (its.length > 0) {
+      const first = its[0].index + baseOffset;
+      const last = its[its.length - 1].index + baseOffset;
+      const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
+      const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
+      useAppStore.getState().setScrollPosition(topPhys, botPhys);
+    }
+  };
+
   useEffect(() => {
     const el = parentRef.current;
     if (!el) return;
     function onScroll() {
-      const its = virtualizer.getVirtualItems();
-      if (its.length > 0) {
-        const first = its[0].index + baseOffset;
-        const last = its[its.length - 1].index + baseOffset;
-        const topPhys = visibleLines ? visibleLines[first] ?? 0 : first;
-        const botPhys = visibleLines ? visibleLines[last] ?? topPhys : last;
-        useAppStore.getState().setScrollPosition(topPhys, botPhys);
-      }
+      reportScroll.current();
       requestPrefetch();
     }
     el.addEventListener("scroll", onScroll, { passive: true });
@@ -427,6 +435,9 @@ export function LogView({
       // same content stays put visually.
       el.scrollTop = el.scrollTop + (prev - baseOffset) * lineHeight;
     }
+    // Re-report the new visible range immediately so a subsequent Clear
+    // reads a fresh scrollBottomLine and keeps advancing cumulatively.
+    requestAnimationFrame(() => reportScroll.current());
   }, [baseOffset, lineHeight]);
 
   useEffect(() => {
