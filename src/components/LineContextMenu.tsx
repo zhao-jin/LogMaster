@@ -1,5 +1,5 @@
 import { Bookmark, Copy, Hash, X, Globe } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { cn } from "../lib/utils";
 
 export interface LineMenuTarget {
@@ -25,33 +25,58 @@ export function LineContextMenu({ target, onClose, onToggleBookmark, onShowAllLi
   useEffect(() => {
     if (!target) return;
     function onDoc(e: MouseEvent) {
+      // Ignore right-button presses: a right-click that lands outside this
+      // menu will fire its own `contextmenu` which reopens the menu at the
+      // new spot. Closing here first creates a race that can swallow the
+      // reopen, making right-clicks appear to "do nothing".
+      if (e.button === 2) return;
       if (!ref.current?.contains(e.target as Node)) onClose();
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
-    document.addEventListener("mousedown", onDoc);
+    // Defer binding by one frame so the very `mousedown` that opened this
+    // menu (and the following right-click sequence) can't immediately close it.
+    let bound = false;
+    const id = window.setTimeout(() => {
+      document.addEventListener("mousedown", onDoc);
+      bound = true;
+    }, 0);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDoc);
+      window.clearTimeout(id);
+      if (bound) document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
     };
   }, [target, onClose]);
 
-  if (!target) return null;
+  // Position exactly at the cursor first; clamp into the viewport only if it
+  // would overflow, using the menu's real measured size (runs before paint so
+  // there's no visible jump and no detached "(0,0) flash").
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !target) return;
+    const rect = el.getBoundingClientRect();
+    const margin = 8;
+    let left = target.x;
+    let top = target.y;
+    if (left + rect.width > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - rect.width - margin);
+    }
+    if (top + rect.height > window.innerHeight - margin) {
+      top = Math.max(margin, window.innerHeight - rect.height - margin);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [target]);
 
-  const showShowAll = onShowAllLinesAtThis && target.viewportOffset !== undefined;
-  const W = 220;
-  // Precise height calculation based on available actions to avoid push-away distance
-  const H = showShowAll ? 180 : 140;
-  const left = Math.min(target.x, window.innerWidth - W - 8);
-  const top = Math.min(target.y, window.innerHeight - H - 8);
+  if (!target) return null;
 
   return (
     <div
       ref={ref}
       className="fixed z-[70] min-w-[220px] py-1 bg-bg-panel border border-border rounded-md shadow-2xl"
-      style={{ left, top }}
+      style={{ left: target.x, top: target.y }}
       role="menu"
     >
       {onShowAllLinesAtThis && target.viewportOffset !== undefined && (
