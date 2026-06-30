@@ -1,5 +1,5 @@
 import { Bookmark, Copy, Hash, X, Globe } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { cn } from "../lib/utils";
 
 export interface LineMenuTarget {
@@ -50,33 +50,29 @@ export function LineContextMenu({ target, onClose, onToggleBookmark, onShowAllLi
     };
   }, [target, onClose]);
 
-  // Position exactly at the cursor first; clamp into the viewport only if it
-  // would overflow, using the menu's real measured size (runs before paint so
-  // there's no visible jump and no detached "(0,0) flash").
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || !target) return;
-    const rect = el.getBoundingClientRect();
-    const margin = 8;
-    let left = target.x;
-    let top = target.y;
-    if (left + rect.width > window.innerWidth - margin) {
-      left = Math.max(margin, window.innerWidth - rect.width - margin);
-    }
-    if (top + rect.height > window.innerHeight - margin) {
-      top = Math.max(margin, window.innerHeight - rect.height - margin);
-    }
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
-  }, [target]);
-
+  // Synchronous viewport clamp — no measurement, no layout effect, so React
+  // owns the style entirely (no stale DOM-overwrite race). Menu geometry is
+  // known a priori: width = 220 (min-w), items are ~32px, separators ~9px,
+  // container py-1 = 8px top+bottom.
   if (!target) return null;
+
+  const showShowAll = onShowAllLinesAtThis && target.viewportOffset !== undefined;
+  const W = 220;
+  const ITEM_H = 32;
+  const SEP_H = 9;
+  const CONTAINER_PAD = 8;
+  const itemCount = 4; // bookmark, copy line, copy line#, close
+  const sepCount = showShowAll ? 2 : 1; // show-all divider + close divider
+  const H = CONTAINER_PAD + (showShowAll ? ITEM_H + SEP_H : 0) + itemCount * ITEM_H + sepCount * SEP_H;
+  const margin = 8;
+  const left = Math.max(margin, Math.min(target.x, window.innerWidth - W - margin));
+  const top = Math.max(margin, Math.min(target.y, window.innerHeight - H - margin));
 
   return (
     <div
       ref={ref}
       className="fixed z-[70] min-w-[220px] py-1 bg-bg-panel border border-border rounded-md shadow-2xl"
-      style={{ left: target.x, top: target.y }}
+      style={{ left, top }}
       role="menu"
     >
       {onShowAllLinesAtThis && target.viewportOffset !== undefined && (
