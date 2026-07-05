@@ -6,7 +6,6 @@ import {
   Plus,
   Trash2,
   X,
-  Ban,
   Star,
   History,
   ChevronDown,
@@ -616,22 +615,15 @@ function RuleRow({
           tone="warn"
         />
 
-        {/* Filter tri-state */}
+        {/* Filter toggle (Show only / Hide) — clicking the active one reverts to none. */}
         <div className="flex items-center rounded border border-border overflow-hidden shrink-0">
-          <SegBtn
-            active={rule.filter === "none"}
-            onClick={() => onChange({ filter: "none" })}
-            icon={<Ban className="w-3.5 h-3.5" />}
-            title="No filter"
-            tone="muted"
-          />
           <SegBtn
             active={rule.filter === "in"}
             onClick={() =>
               onChange({ filter: rule.filter === "in" ? "none" : "in" })
             }
             icon={<Eye className="w-3.5 h-3.5" />}
-            title="Show only matches"
+            title="Show only matches (click again to clear)"
             tone="brand"
           />
           <SegBtn
@@ -640,7 +632,7 @@ function RuleRow({
               onChange({ filter: rule.filter === "out" ? "none" : "out" })
             }
             icon={<EyeOff className="w-3.5 h-3.5" />}
-            title="Hide matches"
+            title="Hide matches (click again to clear)"
             tone="danger"
           />
         </div>
