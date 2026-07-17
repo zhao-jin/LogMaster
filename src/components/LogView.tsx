@@ -173,21 +173,21 @@ export function LogView({
   // Virtual list only renders rows from baseOffset onward.
   const totalRows = Math.max(0, realTotalRows - baseOffset);
 
-  // Browser DOM element height limit: Chromium caps a single element at
-  // ~33,554,432 px.  When totalRows * lineHeight exceeds this, the inner
-  // spacer div gets silently clipped and rows past ~1.67M become
-  // unreachable.  We compress the virtual row height so the total stays
-  // under a safe ceiling, trading row spacing for full scroll coverage.
-  // Each row still renders at the real lineHeight (content is not
-  // distorted), but the virtual slot is smaller with overflow:hidden.
+  // ── Scroll position remapping for very large files ──────────────
+  // Chromium caps a single DOM element at ~33,554,432 px.  When
+  // totalRows * lineHeight exceeds this, we cap the spacer div at
+  // MAX_SCROLL_HEIGHT and remap scroll positions proportionally:
+  //
+  //   virtualScrollTop = el.scrollTop * scrollScale
+  //
+  // Rows are positioned at their REAL Y (idx * lineHeight) but shifted
+  // to account for the compressed scrollbar, so visual row height is
+  // never reduced — only the scrollbar thumb is smaller.
   const MAX_SCROLL_HEIGHT = 28_000_000;
-  const rowVirtualHeight = useMemo(() => {
-    if (wordWrap) return lineHeight; // word-wrap uses measured heights
-    const natural = totalRows * lineHeight;
-    if (natural <= MAX_SCROLL_HEIGHT) return lineHeight;
-    return Math.max(4, Math.floor(MAX_SCROLL_HEIGHT / totalRows));
-  }, [totalRows, lineHeight, wordWrap]);
-  const isCompressed = rowVirtualHeight < lineHeight;
+  const realTotalHeight = totalRows * lineHeight;
+  const needsScaling = !wordWrap && realTotalHeight > MAX_SCROLL_HEIGHT;
+  const scrollScale = needsScaling ? realTotalHeight / MAX_SCROLL_HEIGHT : 1;
+  const spacerHeight = needsScaling ? MAX_SCROLL_HEIGHT : realTotalHeight;
 
   // Cache invalidation strategy
   // ---------------------------
@@ -297,7 +297,7 @@ export function LogView({
   const virtualizer = useVirtualizer({
     count: totalRows,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => rowVirtualHeight,
+    estimateSize: () => lineHeight,
     // 120 ≈ 2 screens of buffer — enough to hide incoming-chunk latency
     // on mouse-wheel / trackpad, while keeping frame cost low during
     // drag-scroll (fewer row nodes to reconcile).
@@ -331,9 +331,36 @@ export function LogView({
     });
   }
 
+  // ── Unified virtual items ──────────────────────────────────────
+  // When scaling is active, compute visible items manually using the
+  // remapped scroll position.  Otherwise, defer to the virtualizer.
+  // The virtualizer still drives re-renders on scroll in both cases.
+  const renderItems = (() => {
+    if (!needsScaling) return virtualizer.getVirtualItems();
+    const el = parentRef.current;
+    if (!el || totalRows === 0) return [];
+    const vScrollTop = el.scrollTop * scrollScale;
+    const vpH = el.clientHeight;
+    const overscanCount = 120;
+    const firstIdx = Math.max(0, Math.floor(vScrollTop / lineHeight) - overscanCount);
+    const lastIdx = Math.min(totalRows - 1, Math.ceil((vScrollTop + vpH) / lineHeight) + overscanCount);
+    const out: { index: number; start: number; size: number; key: number }[] = [];
+    for (let i = firstIdx; i <= lastIdx; i++) {
+      // Real Y position, shifted to compensate for the compressed scrollbar
+      // so the row lands at the correct screen position inside the capped spacer.
+      out.push({
+        index: i,
+        start: i * lineHeight - vScrollTop + el.scrollTop,
+        size: lineHeight,
+        key: i,
+      });
+    }
+    return out;
+  })();
+
   const prefetchVisible = useRef<() => void>(() => {});
   prefetchVisible.current = () => {
-    const its = virtualizer.getVirtualItems();
+    const its = renderItems;
     if (its.length === 0) return;
     const first = its[0].index;
     const last = its[its.length - 1].index;
@@ -390,26 +417,23 @@ export function LogView({
   reportScroll.current = () => {
     const el = parentRef.current;
     if (!el) return;
-    const its = virtualizer.getVirtualItems();
-    if (its.length === 0) return;
 
-    // getVirtualItems() includes the overscan buffer, so its first/last
-    // index is NOT what's actually on screen. Derive the truly-visible
-    // cropped index range from the scroll geometry instead.
-    const top = el.scrollTop;
-    const bottom = top + el.clientHeight;
+    // Derive the truly-visible cropped index range from scroll geometry.
+    // When scaling, map the capped scrollTop back to virtual space.
+    const vScrollTop = el.scrollTop * scrollScale;
+    const vScrollBottom = vScrollTop + el.clientHeight;
     let firstCropped: number;
     let lastCropped: number;
     if (wordWrap) {
-      // Variable row heights — keep only items whose box intersects the viewport.
-      const visible = its.filter((vi) => vi.start < bottom && vi.start + vi.size > top);
+      const its = renderItems;
+      if (its.length === 0) return;
+      const visible = its.filter((vi) => vi.start < el.clientHeight && vi.start + vi.size > 0);
       const pool = visible.length > 0 ? visible : its;
       firstCropped = pool[0].index;
       lastCropped = pool[pool.length - 1].index;
     } else {
-      // Fixed row height — exact arithmetic (use virtual height when compressed).
-      firstCropped = Math.floor(top / rowVirtualHeight);
-      lastCropped = Math.max(firstCropped, Math.ceil(bottom / rowVirtualHeight) - 1);
+      firstCropped = Math.floor(vScrollTop / lineHeight);
+      lastCropped = Math.max(firstCropped, Math.ceil(vScrollBottom / lineHeight) - 1);
       lastCropped = Math.min(lastCropped, totalRows - 1);
     }
 
@@ -447,12 +471,12 @@ export function LogView({
       el.removeEventListener("scroll", onScroll);
       ro.disconnect();
     };
-  }, [virtualizer, visibleLines, wordWrap, baseOffset]);
+  }, [virtualizer, visibleLines, wordWrap, baseOffset, scrollScale]);
 
-  const items = virtualizer.getVirtualItems();
+
   useEffect(() => {
     prefetchVisible.current();
-  }, [fileId, totalRows, visibleLines, baseOffset]);
+  }, [fileId, totalRows, visibleLines, baseOffset, needsScaling]);
 
   // React to view-base changes (Clear / Reset):
   //  - Clear (base moves DOWN): snap to top so the new range starts clean.
@@ -470,18 +494,25 @@ export function LogView({
       el.scrollTop = 0;
     } else {
       // Rows above were revealed; shift down by the recovered offset so the
-      // same content stays put visually.
-      el.scrollTop = el.scrollTop + (prev - baseOffset) * rowVirtualHeight;
+      // same content stays put visually.  Use scrollScale to convert real
+      // pixel offset → capped scrollbar space.
+      el.scrollTop = el.scrollTop + (prev - baseOffset) * lineHeight / scrollScale;
     }
     // Re-report the new visible range immediately so a subsequent Clear
     // reads a fresh scrollBottomLine and keeps advancing cumulatively.
     requestAnimationFrame(() => reportScroll.current());
-  }, [baseOffset, rowVirtualHeight]);
+  }, [baseOffset, lineHeight, scrollScale]);
 
   useEffect(() => {
     if (!followTail || totalRows === 0) return;
-    virtualizer.scrollToIndex(totalRows - 1, { align: "end" });
-  }, [lineCount, followTail, virtualizer, totalRows]);
+    if (needsScaling) {
+      // Scroll to the bottom of the capped spacer.
+      const el = parentRef.current;
+      if (el) el.scrollTop = spacerHeight;
+    } else {
+      virtualizer.scrollToIndex(totalRows - 1, { align: "end" });
+    }
+  }, [lineCount, followTail, virtualizer, totalRows, needsScaling, spacerHeight]);
 
   // Reset measurement cache when wrap mode or font metrics change so the
   // virtualizer recomputes row heights on the fly.
@@ -500,9 +531,18 @@ export function LogView({
     }
     // Translate to cropped index space.
     const croppedIdx = Math.max(0, viewIdx - baseOffset);
-    virtualizer.scrollToIndex(croppedIdx, { align: "center" });
+    if (needsScaling) {
+      // Convert virtual Y to capped scrollbar space.
+      const el = parentRef.current;
+      if (el) {
+        const virtualY = croppedIdx * lineHeight;
+        el.scrollTop = Math.max(0, virtualY / scrollScale - el.clientHeight / 2);
+      }
+    } else {
+      virtualizer.scrollToIndex(croppedIdx, { align: "center" });
+    }
     onScrollDone();
-  }, [scrollTo, visibleLines, virtualizer, onScrollDone, baseOffset]);
+  }, [scrollTo, visibleLines, virtualizer, onScrollDone, baseOffset, needsScaling, scrollScale, lineHeight]);
 
   const compiledRules = useMemo(() => {
     return rules.map((r) => {
@@ -570,8 +610,9 @@ export function LogView({
 
       if (parentRef.current) {
         // Direct, non-clamping single scroll to the exact estimated location.
-        // Avoids browser clipping of incomplete scroll height in the early frames.
-        const targetScrollTop = Math.max(0, physLine * lineHeight - viewportOffset);
+        // When scaling, convert virtual Y to capped scrollbar space.
+        const targetVirtualY = Math.max(0, physLine * lineHeight - viewportOffset);
+        const targetScrollTop = needsScaling ? targetVirtualY / scrollScale : targetVirtualY;
         parentRef.current.scrollTop = targetScrollTop;
 
         // Double-buffer protection against virtualizer re-layouts, resize updates, and late measurements.
@@ -583,7 +624,7 @@ export function LogView({
         });
       }
     }
-  }, [visibleLines, lineHeight]);
+  }, [visibleLines, lineHeight, needsScaling, scrollScale]);
 
   return (
     <div
@@ -599,9 +640,9 @@ export function LogView({
     >
       <div
         className={"relative " + (wordWrap ? "w-full" : "inline-block")}
-        style={{ height: `${virtualizer.getTotalSize()}px` }}
+        style={{ height: `${needsScaling ? spacerHeight : virtualizer.getTotalSize()}px` }}
       >
-        {items.map((vi) => {
+        {renderItems.map((vi) => {
           const viewIdx = vi.index;
           // realViewIdx maps the cropped virtual index back to the underlying
           // view space (post-filter), then to a physical line.
@@ -632,7 +673,6 @@ export function LogView({
               showLineNumbers={showLineNumbers}
               lineNumWidth={lineNumWidth}
               wordWrap={wordWrap}
-              compressed={isCompressed}
               measureElement={wordWrap ? virtualizer.measureElement : undefined}
               onToggleBookmark={onToggleBookmark}
               onContextMenu={handleContextMenu}
@@ -669,7 +709,6 @@ interface RowProps {
   showLineNumbers: boolean;
   lineNumWidth: number;
   wordWrap: boolean;
-  compressed: boolean;
   measureElement?: (node: Element | null) => void;
   onToggleBookmark: (physLine: number) => void;
   onContextMenu: (t: LineMenuTarget) => void;
@@ -689,7 +728,6 @@ const Row = memo(function Row({
   showLineNumbers,
   lineNumWidth,
   wordWrap,
-  compressed,
   measureElement,
   onToggleBookmark,
   onContextMenu,
@@ -705,10 +743,6 @@ const Row = memo(function Row({
       }
       style={{
         transform: `translateY(${start}px)`,
-        // In compressed mode the virtual slot is smaller than the real
-        // line height; clip overflow so rows don't visually bleed into
-        // each other.
-        overflow: compressed ? "hidden" : undefined,
         // In word-wrap mode, let the row grow as content wraps.
         // In fixed-height mode, use the estimated size for performance.
         ...(wordWrap
