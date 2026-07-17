@@ -173,6 +173,22 @@ export function LogView({
   // Virtual list only renders rows from baseOffset onward.
   const totalRows = Math.max(0, realTotalRows - baseOffset);
 
+  // Browser DOM element height limit: Chromium caps a single element at
+  // ~33,554,432 px.  When totalRows * lineHeight exceeds this, the inner
+  // spacer div gets silently clipped and rows past ~1.67M become
+  // unreachable.  We compress the virtual row height so the total stays
+  // under a safe ceiling, trading row spacing for full scroll coverage.
+  // Each row still renders at the real lineHeight (content is not
+  // distorted), but the virtual slot is smaller with overflow:hidden.
+  const MAX_SCROLL_HEIGHT = 28_000_000;
+  const rowVirtualHeight = useMemo(() => {
+    if (wordWrap) return lineHeight; // word-wrap uses measured heights
+    const natural = totalRows * lineHeight;
+    if (natural <= MAX_SCROLL_HEIGHT) return lineHeight;
+    return Math.max(4, Math.floor(MAX_SCROLL_HEIGHT / totalRows));
+  }, [totalRows, lineHeight, wordWrap]);
+  const isCompressed = rowVirtualHeight < lineHeight;
+
   // Cache invalidation strategy
   // ---------------------------
   // The chunk cache is keyed by chunkIdx in the *view* (post-filter)
@@ -281,7 +297,7 @@ export function LogView({
   const virtualizer = useVirtualizer({
     count: totalRows,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => lineHeight,
+    estimateSize: () => rowVirtualHeight,
     // 120 ≈ 2 screens of buffer — enough to hide incoming-chunk latency
     // on mouse-wheel / trackpad, while keeping frame cost low during
     // drag-scroll (fewer row nodes to reconcile).
@@ -391,9 +407,9 @@ export function LogView({
       firstCropped = pool[0].index;
       lastCropped = pool[pool.length - 1].index;
     } else {
-      // Fixed row height — exact arithmetic.
-      firstCropped = Math.floor(top / lineHeight);
-      lastCropped = Math.max(firstCropped, Math.ceil(bottom / lineHeight) - 1);
+      // Fixed row height — exact arithmetic (use virtual height when compressed).
+      firstCropped = Math.floor(top / rowVirtualHeight);
+      lastCropped = Math.max(firstCropped, Math.ceil(bottom / rowVirtualHeight) - 1);
       lastCropped = Math.min(lastCropped, totalRows - 1);
     }
 
@@ -455,12 +471,12 @@ export function LogView({
     } else {
       // Rows above were revealed; shift down by the recovered offset so the
       // same content stays put visually.
-      el.scrollTop = el.scrollTop + (prev - baseOffset) * lineHeight;
+      el.scrollTop = el.scrollTop + (prev - baseOffset) * rowVirtualHeight;
     }
     // Re-report the new visible range immediately so a subsequent Clear
     // reads a fresh scrollBottomLine and keeps advancing cumulatively.
     requestAnimationFrame(() => reportScroll.current());
-  }, [baseOffset, lineHeight]);
+  }, [baseOffset, rowVirtualHeight]);
 
   useEffect(() => {
     if (!followTail || totalRows === 0) return;
@@ -616,6 +632,7 @@ export function LogView({
               showLineNumbers={showLineNumbers}
               lineNumWidth={lineNumWidth}
               wordWrap={wordWrap}
+              compressed={isCompressed}
               measureElement={wordWrap ? virtualizer.measureElement : undefined}
               onToggleBookmark={onToggleBookmark}
               onContextMenu={handleContextMenu}
@@ -652,6 +669,7 @@ interface RowProps {
   showLineNumbers: boolean;
   lineNumWidth: number;
   wordWrap: boolean;
+  compressed: boolean;
   measureElement?: (node: Element | null) => void;
   onToggleBookmark: (physLine: number) => void;
   onContextMenu: (t: LineMenuTarget) => void;
@@ -671,6 +689,7 @@ const Row = memo(function Row({
   showLineNumbers,
   lineNumWidth,
   wordWrap,
+  compressed,
   measureElement,
   onToggleBookmark,
   onContextMenu,
@@ -686,6 +705,10 @@ const Row = memo(function Row({
       }
       style={{
         transform: `translateY(${start}px)`,
+        // In compressed mode the virtual slot is smaller than the real
+        // line height; clip overflow so rows don't visually bleed into
+        // each other.
+        overflow: compressed ? "hidden" : undefined,
         // In word-wrap mode, let the row grow as content wraps.
         // In fixed-height mode, use the estimated size for performance.
         ...(wordWrap
